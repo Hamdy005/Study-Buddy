@@ -64,7 +64,10 @@ async def _process_pdf_background(material_id: str, file_content: bytes):
         loop = asyncio.get_event_loop()
         # Skip processing if this user already has a material with this title
         mat = await loop.run_in_executor(None, get_material, material_id)
-        if mat and await loop.run_in_executor(None, is_title_taken, mat.get("title", ""), material_id, mat.get("user_id")):
+        if mat and await loop.run_in_executor(
+            None,
+            lambda: is_title_taken(mat.get("title", ""), exclude_id=material_id, user_id=mat.get("user_id"))
+        ):
             logger.info(f"Skipping processing for {material_id}: duplicate title")
             await loop.run_in_executor(None, update_material_status, material_id, "failed", "Duplicate title. Please rename to retry.")
             return
@@ -88,7 +91,10 @@ async def _process_url_background(material_id: str, url: str):
         loop = asyncio.get_event_loop()
         # Skip if this user already has a material with this title
         mat = await loop.run_in_executor(None, get_material, material_id)
-        if mat and await loop.run_in_executor(None, is_title_taken, mat.get("title", ""), material_id, mat.get("user_id")):
+        if mat and await loop.run_in_executor(
+            None,
+            lambda: is_title_taken(mat.get("title", ""), exclude_id=material_id, user_id=mat.get("user_id"))
+        ):
             logger.info(f"Skipping URL processing for {material_id}: duplicate title, waiting for rename")
             return
 
@@ -155,8 +161,11 @@ async def scrape_url(
         ))
         material_id = material["id"]
 
-        # Skip processing if title conflicts — user must rename first
-        is_taken = await loop.run_in_executor(None, is_title_taken, input.url, material_id, user_id)
+        # Skip processing if title conflicts within user scope — user must rename first
+        is_taken = await loop.run_in_executor(
+            None,
+            lambda: is_title_taken(input.url, exclude_id=material_id, user_id=user_id)
+        )
         if not is_taken:
             background_tasks.add_task(_process_url_background, material_id, input.url)
 
@@ -208,12 +217,18 @@ async def rename_material_endpoint(
         raise HTTPException(404, "Material not found")
     if mat.get("user_id") != user_id:
         raise HTTPException(403, "Not authorized to rename this material")
+    # Topics have no URL — renaming is disabled for them
+    if mat.get("source_type") == "url" and not mat.get("url"):
+        raise HTTPException(403, "Custom topic names cannot be changed")
     new_title = body.title.strip()
     if not new_title:
         raise HTTPException(400, "Title cannot be empty")
-    existing = await loop.run_in_executor(None, lambda: list_materials(user_id))
-    if any(m.get("id") != material_id and m.get("title", "").strip().lower() == new_title.lower() for m in existing):
-        raise HTTPException(409, "A material with this title already exists")
+    is_taken = await loop.run_in_executor(
+        None,
+        lambda: is_title_taken(new_title, exclude_id=material_id, user_id=user_id)
+    )
+    if is_taken:
+        raise HTTPException(409, "You already have a material with this title")
     await loop.run_in_executor(None, lambda: rename_material(material_id, new_title))
 
     # If the material was pending due to title conflict, try processing now
@@ -233,7 +248,7 @@ async def create_topic(
     user_id: str = Depends(get_current_user_id)
 ):
     if is_title_taken(body.topic, user_id=user_id):
-        raise HTTPException(409, "A material with this title already exists")
+        raise HTTPException(409, "You already have a material with this title")
     mat = create_material(
         user_id=user_id,
         title=body.topic.strip(),

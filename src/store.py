@@ -159,6 +159,7 @@ def list_materials(user_id: str) -> list[dict]:
 
 
 def is_title_taken(title: str, exclude_id: Optional[str] = None, user_id: Optional[str] = None) -> bool:
+    """Check whether *title* is already used by *user_id* (or globally when user_id is None)."""
     normalized = title.strip().lower()
     if not normalized:
         return False
@@ -211,7 +212,7 @@ def create_material(user_id: str, source_type: str, title: str,
     if source_type == "topic":
         actual_source_type = "url"
 
-    # Auto-resolve duplicate titles to prevent DB unique constraint violation
+    # Auto-resolve duplicate titles PER USER so each user's material list
     original_title = title
     counter = 1
     while is_title_taken(title, user_id=user_id):
@@ -224,8 +225,10 @@ def create_material(user_id: str, source_type: str, title: str,
         data["file_path"] = file_path
     if url:
         data["url"] = url
+
+    # Insert assuming the global constraint on `title` has been replaced with a per-user one
     result = _robust_execute(_table_supabase("materials").insert(data))
-    
+
     ret_data = result.data[0]
     if ret_data.get("source_type") == "url" and not ret_data.get("url"):
         ret_data["source_type"] = "topic"

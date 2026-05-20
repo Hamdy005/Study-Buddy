@@ -410,13 +410,15 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
                     <h1 className="text-2xl sm:text-3xl font-bold text-foreground truncate">
                       {material.title}
                     </h1>
-                    <button
-                      onClick={() => { setIsRenaming(true); setRenameInput(material.title) }}
-                      className="p-1.5 rounded-lg hover:bg-muted transition-colors flex-shrink-0"
-                      title="Rename"
-                    >
-                      <Pencil className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                    </button>
+                    {!isTopic && (
+                      <button
+                        onClick={() => { setIsRenaming(true); setRenameInput(material.title) }}
+                        className="p-1.5 rounded-lg hover:bg-muted transition-colors flex-shrink-0"
+                        title="Rename"
+                      >
+                        <Pencil className="w-4 h-4 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    )}
                     <button
                       onClick={() => setIsDeleteDialogOpen(true)}
                       className="p-1.5 rounded-lg hover:bg-destructive/10 transition-colors flex-shrink-0"

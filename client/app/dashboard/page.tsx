@@ -466,15 +466,10 @@ export default function DashboardPage() {
 
     setIsUploadOpen(false)
     try {
-      const result = await materialsAPI.addTopic(topicInput.trim())
+      await materialsAPI.addTopic(topicInput.trim())
       toast.success('Topic added successfully!')
       setTopicInput('')
-      const freshMaterials = await loadMaterials()
-      const newMat = freshMaterials.find(m => m.id === result.material_id)
-      if (newMat) {
-        setRenameTarget(newMat)
-        setRenameInput(newMat.title)
-      }
+      loadMaterials()
     } catch (err: unknown) {
       toast.error('Failed to add topic')
     }
@@ -892,16 +887,18 @@ export default function DashboardPage() {
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer"
-                                    onClick={() => {
-                                      setRenameTarget(material)
-                                      setRenameInput(material.title)
-                                    }}
-                                  >
-                                    <Pencil className="mr-2 h-4 w-4" />
-                                    Rename
-                                  </DropdownMenuItem>
+                                  {material.source_type !== 'topic' && (
+                                    <DropdownMenuItem
+                                      className="cursor-pointer"
+                                      onClick={() => {
+                                        setRenameTarget(material)
+                                        setRenameInput(material.title)
+                                      }}
+                                    >
+                                      <Pencil className="mr-2 h-4 w-4" />
+                                      Rename
+                                    </DropdownMenuItem>
+                                  )}
                                   <DropdownMenuItem
                                     className="cursor-pointer text-destructive focus:text-destructive"
                                     onClick={() => enterSelectionMode(material.id)}
