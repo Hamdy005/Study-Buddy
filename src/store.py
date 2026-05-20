@@ -1,4 +1,6 @@
 import os
+import time
+from httpx import RemoteProtocolError
 from typing import Optional
 import logging
 from datetime import datetime, timezone, date
@@ -125,13 +127,12 @@ def _table_supabase(table: str):
     return _FakeTable(table)
 
 def _robust_execute(query):
-    import time
-    from httpx import RemoteProtocolError
     for attempt in range(3):
         try:
             return query.execute()
-        except (RemoteProtocolError, Exception) as e:
-            if attempt == 2: raise e
+        except RemoteProtocolError as e:
+            if attempt == 2:
+                raise e
             time.sleep(0.5 * (attempt + 1))
     return query.execute()
 

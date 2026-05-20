@@ -124,7 +124,8 @@ def web_summarizer(topic: str) -> str:
         logger.warning(f"Arxiv search for '{topic}' failed: {e}")
 
     if not all_content:
-        raise ValueError(f"No content found for topic: {topic}")
+        logger.warning(f"No content found for topic: {topic}. Falling back to general knowledge.")
+        all_content.append(f"Topic: {topic}\n\nPlease provide a comprehensive educational summary of this topic based on your general knowledge.")
 
     combined = "\n\n".join(all_content)
     logger.info(f"Web search combined text length for topic '{topic}': {len(combined)}")

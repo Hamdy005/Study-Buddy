@@ -56,6 +56,12 @@ Include exactly:
     ]
 }}
 
+**CRITICAL RULES:**
+1. Your final output MUST be exactly the JSON structure above.
+2. DO NOT include any conversational text, prefixes, or markdown blocks (like ```json).
+3. Even if you cannot find enough context or tools fail, YOU MUST STILL output a valid JSON containing questions based on your general knowledge.
+4. ANY deviation from the valid JSON format will break the system.
+
 **AVAILABLE CONTEXT:**
 {context}
 

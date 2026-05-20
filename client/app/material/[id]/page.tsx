@@ -1391,7 +1391,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
   const [quizId, setQuizId] = useState<string | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [result, setResult] = useState<QuizResult | null>(null)
-  const [isLoadingExistingQuiz, setIsLoadingExistingQuiz] = useState(sourceType !== 'topic')
+  const [isLoadingExistingQuiz, setIsLoadingExistingQuiz] = useState(true)
 
   const clampCount = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1491,11 +1491,6 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
   // ── Load existing quiz on mount ──────────────────────
   useEffect(() => {
     const checkStatus = async () => {
-      if (sourceType === 'topic') {
-        setIsLoadingExistingQuiz(false)
-        return
-      }
-
       const wasGenerating = localStorage.getItem(`generating_quiz_${materialId}`) === 'true'
       setIsLoadingExistingQuiz(true)
 

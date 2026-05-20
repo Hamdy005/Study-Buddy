@@ -29,6 +29,31 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
+const PROFILE_CACHE_KEY = 'auth_user'
+const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
+const PROFILE_CACHE_TTL_MS = 60_000 // 60 seconds
+
+function getCachedProfile(): UserData | null {
+  try {
+    const ts = Number(localStorage.getItem(PROFILE_CACHE_TS_KEY) ?? 0)
+    if (Date.now() - ts > PROFILE_CACHE_TTL_MS) return null
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as UserData
+  } catch {
+    return null
+  }
+}
+
+function setCachedProfile(user: UserData) {
+  localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(user))
+  localStorage.setItem(PROFILE_CACHE_TS_KEY, String(Date.now()))
+}
+
+function bustProfileCache() {
+  localStorage.removeItem(PROFILE_CACHE_TS_KEY)
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserData | null>(null)
   const [token, setToken] = useState<string | null>(null)
@@ -41,30 +66,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.theme, setTheme])
 
+  // ── Hydrate from localStorage on first render ──────────────────────────────
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
     const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
     if (searchParams.has('error') || hashParams.has('error')) {
       localStorage.removeItem('auth_token')
-      localStorage.removeItem('auth_user')
+      localStorage.removeItem(PROFILE_CACHE_KEY)
+      bustProfileCache()
       setIsLoading(false)
       return
     }
 
     const storedToken = localStorage.getItem('auth_token')
-    const storedUser = localStorage.getItem('auth_user')
+    const storedUser = localStorage.getItem(PROFILE_CACHE_KEY)
     if (storedToken && storedUser) {
       try {
         setToken(storedToken)
         setUser(JSON.parse(storedUser))
       } catch {
         localStorage.removeItem('auth_token')
-        localStorage.removeItem('auth_user')
+        localStorage.removeItem(PROFILE_CACHE_KEY)
+        bustProfileCache()
       }
     }
     setIsLoading(false)
   }, [])
 
+  // ── Supabase session sync ──────────────────────────────────────────────────
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
     const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
@@ -74,63 +103,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     let isActive = true
-    const syncSupabaseSession = async () => {
+
+    const fetchAndSetProfile = async (authToken: string, sbUser: any) => {
+      // Check the short-lived cache first to skip redundant API calls
+      const cached = getCachedProfile()
+      if (cached) {
+        if (isActive) {
+          setUser(cached)
+        }
+        return
+      }
+
       try {
-        const { data } = await supabase.auth.getSession()
-        if (!isActive) return
-        const session = data.session
-        if (!session) return
-        const sbUser = session.user
-        const authToken = session.access_token
-        setToken(authToken)
-        localStorage.setItem('auth_token', authToken)
-        
-        // Fetch full profile from our backend (includes custom name, avatar, and usage)
-        try {
-          const res = await authAPI.getProfile()
-          if (res.user && isActive) {
+        const res = await authAPI.getProfile()
+        if (res.user && isActive) {
+          // Don't persist a fallback profile — wait for the real one
+          if ((res.user as any)._is_fallback) {
             setUser(res.user)
-            localStorage.setItem('auth_user', JSON.stringify(res.user))
+            return
           }
-        } catch (err) {
-          // If profile fetch fails, fallback to metadata as a temporary measure
-          const updatedUser: UserData = {
-            id: sbUser.id,
-            name:
-              sbUser.user_metadata?.full_name ||
-              sbUser.user_metadata?.name ||
-              sbUser.email?.split('@')[0] ||
-              'User',
-            email: sbUser.email || '',
-            avatar: sbUser.user_metadata?.avatar_url,
-          }
-          if (isActive) {
-            setUser(updatedUser)
-            localStorage.setItem('auth_user', JSON.stringify(updatedUser))
-          }
+          setUser(res.user)
+          setCachedProfile(res.user)
         }
       } catch {
-        // supabase not available — nothing to sync
-      }
-    }
-
-    syncSupabaseSession()
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) return
-      const sbUser = session.user
-      const authToken = session.access_token
-      setToken(authToken)
-      localStorage.setItem('auth_token', authToken)
-
-      // Fetch full profile from our backend on auth change
-      authAPI.getProfile().then(res => {
-        if (res.user) {
-          setUser(res.user)
-          localStorage.setItem('auth_user', JSON.stringify(res.user))
-        }
-      }).catch(() => {
-        const updatedUser: UserData = {
+        // Profile fetch failed — show Google metadata temporarily (not persisted to cache)
+        const fallback: UserData = {
           id: sbUser.id,
           name:
             sbUser.user_metadata?.full_name ||
@@ -140,9 +137,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: sbUser.email || '',
           avatar: sbUser.user_metadata?.avatar_url,
         }
-        setUser(updatedUser)
-        localStorage.setItem('auth_user', JSON.stringify(updatedUser))
-      })
+        if (isActive) {
+          setUser(fallback)
+        }
+      }
+    }
+
+    const syncSupabaseSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (!isActive) return
+        const session = data.session
+        if (!session) return
+        const authToken = session.access_token
+        setToken(authToken)
+        localStorage.setItem('auth_token', authToken)
+        await fetchAndSetProfile(authToken, session.user)
+      } catch {
+        // supabase not available — nothing to sync
+      }
+    }
+
+    syncSupabaseSession()
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) return
+      const authToken = session.access_token
+      setToken(authToken)
+      localStorage.setItem('auth_token', authToken)
+      fetchAndSetProfile(authToken, session.user)
     })
 
     return () => {
@@ -155,22 +178,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userData)
     setToken(authToken)
     localStorage.setItem('auth_token', authToken)
-    localStorage.setItem('auth_user', JSON.stringify(userData))
+    setCachedProfile(userData)
   }
 
   const logout = () => {
+    supabase.auth.signOut().catch(() => {})
     setUser(null)
     setToken(null)
     localStorage.removeItem('auth_token')
-    localStorage.removeItem('auth_user')
+    localStorage.removeItem(PROFILE_CACHE_KEY)
     localStorage.removeItem('cached_materials')
+    bustProfileCache()
   }
 
   const updateUser = (data: Partial<UserData>) => {
     if (!user) return
     const updated = { ...user, ...data }
     setUser(updated)
-    localStorage.setItem('auth_user', JSON.stringify(updated))
+    setCachedProfile(updated)
+    // Bust TTL so the next auth event re-fetches fresh data from the DB
+    bustProfileCache()
   }
 
   return (
