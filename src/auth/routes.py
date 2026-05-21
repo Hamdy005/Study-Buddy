@@ -55,15 +55,24 @@ async def get_profile(
                         data["display_name"] = real_name
 
                     try:
-                        res_upd = _table_supabase("profiles").insert(data).execute()
+                        # Use upsert so we NEVER overwrite daily_requests / last_request_date
+                        # on subsequent sign-ins.  Only id/email/display_name are safe to set.
+                        client = supabase  # already resolved above
+                        res_upd = (
+                            client.table("profiles")
+                            .upsert(data, on_conflict="id", ignore_duplicates=False)
+                            .execute()
+                        )
                         if res_upd.data:
                             user = _map_profile(res_upd.data[0])
                     except Exception:
-                        # Profile row probably already exists — do a targeted update instead
+                        # Upsert failed — fall back to a plain update (never resets usage)
                         try:
+                            # Strip the id from the update payload to avoid PK conflicts
+                            update_data = {k: v for k, v in data.items() if k != "id"}
                             res_upd = (
                                 _table_supabase("profiles")
-                                .update(data)
+                                .update(update_data)
                                 .eq("id", user_id)
                                 .execute()
                             )
@@ -75,19 +84,22 @@ async def get_profile(
                 pass
 
     if not user:
-        # Last resort: synthetic profile from the JWT claims so the UI doesn't break
+        # Last resort: synthetic profile from the JWT claims so the UI doesn't break.
+        # We still try to fetch real usage from the DB to avoid resetting the counter.
         user_obj = current_user
         uid = getattr(user_obj, "id", None) or (user_obj.get("id") if isinstance(user_obj, dict) else None)
         if uid:
-            from src.store import _map_profile
+            from src.store import _map_profile, get_usage
             meta = getattr(user_obj, "user_metadata", {}) or {}
+            # Fetch real usage so the fallback profile doesn't reset the counter to 0
+            real_usage = get_usage(uid)
             user = _map_profile({
                 "id": uid,
                 "display_name": meta.get("full_name") or meta.get("name") or "User",
                 "email": getattr(user_obj, "email", "") or "",
                 "avatar_url": "",
-                "daily_requests": 0,
-                "last_request_date": "",
+                "daily_requests": real_usage.get("used", 0),
+                "last_request_date": __import__('datetime').date.today().isoformat(),
                 "_is_fallback": True,
             })
 

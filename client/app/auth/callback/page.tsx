@@ -36,16 +36,30 @@ export default function AuthCallbackPage() {
       const session = data.session
       const sbUser = session.user
 
+      // ── Prefer the DB name/avatar (display cache) over Google metadata ──────
+      const DISPLAY_CACHE_KEY = 'auth_display'
+      let displayName =
+        sbUser.user_metadata?.full_name ||
+        sbUser.user_metadata?.name ||
+        sbUser.email?.split('@')[0] ||
+        'User'
+      let displayAvatar: string | undefined = sbUser.user_metadata?.avatar_url
+
+      try {
+        const raw = localStorage.getItem(DISPLAY_CACHE_KEY)
+        if (raw) {
+          const display = JSON.parse(raw)
+          if (display.name) displayName = display.name
+          if (display.avatar !== undefined) displayAvatar = display.avatar
+        }
+      } catch {}
+
       login(
         {
           id: sbUser.id,
-          name:
-            sbUser.user_metadata?.full_name ||
-            sbUser.user_metadata?.name ||
-            sbUser.email?.split('@')[0] ||
-            'User',
+          name: displayName,
           email: sbUser.email!,
-          avatar: sbUser.user_metadata?.avatar_url,
+          avatar: displayAvatar,
         },
         session.access_token
       )
