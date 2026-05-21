@@ -36,8 +36,13 @@ export default function AuthCallbackPage() {
       const session = data.session
       const sbUser = session.user
 
-      // ── Prefer the DB name/avatar (display cache) over Google metadata ──────
-      const DISPLAY_CACHE_KEY = 'auth_display'
+      // ── Prefer the DB name/avatar (per-user display cache) over Google metadata ────
+      // Each account's cache is keyed by user ID so different accounts never mix.
+      const userId = sbUser.id
+      const DISPLAY_CACHE_KEY = `auth_display_${userId}`
+      const PROFILE_CACHE_KEY = 'auth_user'
+      const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
+
       let displayName =
         sbUser.user_metadata?.full_name ||
         sbUser.user_metadata?.name ||
@@ -54,15 +59,26 @@ export default function AuthCallbackPage() {
         }
       } catch {}
 
-      login(
-        {
-          id: sbUser.id,
-          name: displayName,
-          email: sbUser.email!,
-          avatar: displayAvatar,
-        },
-        session.access_token
-      )
+      const userData = {
+        id: sbUser.id,
+        name: displayName,
+        email: sbUser.email!,
+        avatar: displayAvatar,
+      }
+
+      // ── Write caches BEFORE calling login() ────────────────────────────────
+      // The auth context's onAuthStateChange fires concurrently the moment
+      // getSession() resolves. If the profile cache is empty at that point,
+      // fetchAndSetProfile() falls through to its optimistic render and briefly
+      // shows Google's name/avatar. Pre-populating the cache here ensures the
+      // concurrent listener finds data immediately and returns early.
+      try {
+        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(userData))
+        localStorage.setItem(PROFILE_CACHE_TS_KEY, String(Date.now()))
+        localStorage.setItem(DISPLAY_CACHE_KEY, JSON.stringify({ name: displayName, avatar: displayAvatar }))
+      } catch {}
+
+      login(userData, session.access_token)
 
       router.replace('/dashboard')
     }

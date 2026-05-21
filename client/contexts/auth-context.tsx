@@ -33,15 +33,19 @@ const PROFILE_CACHE_KEY = 'auth_user'
 const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
 const PROFILE_CACHE_TTL_MS = 60_000 // 60 seconds
 
-// ── Display-only cache (name + avatar) ────────────────────────────────────────
+// ── Display-only cache (name + avatar), keyed per user ────────────────────────
+// Keyed as `auth_display_<userId>` so different accounts never bleed into each other.
 // This cache is intentionally kept through logout — it contains NO sensitive data.
-// Its sole purpose is to show the user's name/avatar INSTANTLY on every page load
+// Its sole purpose is to show the correct user's name/avatar INSTANTLY on page load
 // without waiting for any async session or API calls to complete.
-const DISPLAY_CACHE_KEY = 'auth_display'
 
-function getDisplayCache(): { name: string; avatar?: string } | null {
+function displayCacheKey(userId: string): string {
+  return `auth_display_${userId}`
+}
+
+function getDisplayCache(userId: string): { name: string; avatar?: string } | null {
   try {
-    const raw = localStorage.getItem(DISPLAY_CACHE_KEY)
+    const raw = localStorage.getItem(displayCacheKey(userId))
     if (!raw) return null
     return JSON.parse(raw)
   } catch {
@@ -49,10 +53,24 @@ function getDisplayCache(): { name: string; avatar?: string } | null {
   }
 }
 
-function setDisplayCache(name: string, avatar?: string) {
+function setDisplayCache(userId: string, name: string, avatar?: string) {
   try {
-    localStorage.setItem(DISPLAY_CACHE_KEY, JSON.stringify({ name, avatar }))
+    localStorage.setItem(displayCacheKey(userId), JSON.stringify({ name, avatar }))
   } catch {}
+}
+
+/** Read the user ID from the stale profile data (ignoring TTL). Used when the
+ *  token is valid but the profile cache has expired, so we can still key into
+ *  the correct per-user display cache without waiting for an async session call. */
+function getLastStoredUserId(): string | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY)
+    if (!raw) return null
+    const profile = JSON.parse(raw)
+    return (profile as UserData)?.id || null
+  } catch {
+    return null
+  }
 }
 
 function getCachedProfile(): UserData | null {
@@ -70,8 +88,8 @@ function getCachedProfile(): UserData | null {
 function setCachedProfile(user: UserData) {
   localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(user))
   localStorage.setItem(PROFILE_CACHE_TS_KEY, String(Date.now()))
-  // Always keep the display cache in sync with the latest real profile
-  setDisplayCache(user.name, user.avatar)
+  // Always keep the per-user display cache in sync with the latest real profile
+  setDisplayCache(user.id, user.name, user.avatar)
 }
 
 function bustProfileCache() {
@@ -115,13 +133,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } else if (storedToken) {
       // Token exists but no full cached profile (e.g. right after sign-in or cache expired).
-      // Immediately show the display cache (name + avatar) so the UI isn't blank
-      // while the async Supabase session + API calls complete.
-      const display = getDisplayCache()
-      if (display) {
-        // Partial user — id/email will be filled in once the real profile arrives.
-        // We use an empty string for id so the rest of the UI doesn't break.
-        setUser({ id: '', name: display.name, email: '', avatar: display.avatar })
+      // Recover the user ID from the stale profile data to key into the right display cache.
+      const lastUserId = getLastStoredUserId()
+      if (lastUserId) {
+        const display = getDisplayCache(lastUserId)
+        if (display) {
+          // Partial user — full profile will arrive via the async Supabase session call.
+          setUser({ id: lastUserId, name: display.name, email: '', avatar: display.avatar })
+        }
       }
     }
     setIsLoading(false)
@@ -149,10 +168,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // ── Optimistic render ───────────────────────────────────────────────────
-      // Prefer the display cache (user's custom DB name/avatar) over OAuth  metadata (Google name/photo). 
-      //  Only fall back to Google data on the very first sign-in when no display cache exists yet.
+      // Prefer this user's per-user display cache over Google's OAuth metadata.
+      // Only fall back to Google data on the very first sign-in for this account.
       if (isActive && sbUser) {
-        const display = getDisplayCache()
+        const display = getDisplayCache(sbUser.id)
         const optimistic: UserData = {
           id: sbUser.id,
           name:
@@ -167,10 +186,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             sbUser.user_metadata?.avatar_url,
         }
         setUser(optimistic)
-        // Only seed the display cache on the very first sign-in (no existing cache).
+        // Only seed the display cache on the very first sign-in for this account.
         // Never overwrite it with OAuth data — the real DB profile will update it.
         if (!display) {
-          setDisplayCache(optimistic.name, optimistic.avatar)
+          setDisplayCache(sbUser.id, optimistic.name, optimistic.avatar)
         }
       }
 
@@ -236,9 +255,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(PROFILE_CACHE_KEY)
     localStorage.removeItem('cached_materials')
     bustProfileCache()
-    // NOTE: We intentionally do NOT remove DISPLAY_CACHE_KEY here.
-    // The display cache (name + avatar only) is non-sensitive and keeping it
-    // means the user's name/avatar appears instantly on their next sign-in.
+    // NOTE: We intentionally do NOT remove per-user display caches on logout.
+    // Each cache is keyed by user ID (auth_display_<uid>), contains no sensitive data,
+    // and allows each account's name/avatar to appear instantly on next sign-in.
   }
 
   const updateUser = (data: Partial<UserData>) => {
