@@ -139,7 +139,7 @@ export default function HomePage() {
       {/* ── Right panel ── */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
         {/* Mobile logo */}
-        <div className="mb-10 lg:hidden">
+        <div className="mb-10 w-full max-w-sm lg:hidden">
           <Logo />
         </div>
 
@@ -159,6 +159,11 @@ export default function HomePage() {
 
           {/* Sign in card */}
           <div className="space-y-4">
+            {hasError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                Sign In Failed, Try Signing In Again
+              </div>
+            )}
             <Button
               variant="outline"
               className="w-full h-12 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all"
