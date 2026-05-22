@@ -149,6 +149,7 @@ export default function HomePage() {
           transition={{ duration: 0.5, delay: 0.1 }}
           className="w-full max-w-sm space-y-8"
         >
+
           {/* Heading */}
           <div className="space-y-2">
             <h2 className="text-2xl font-bold text-foreground">Welcome back</h2>
@@ -157,13 +158,14 @@ export default function HomePage() {
             </p>
           </div>
 
+          {hasError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+              Sign In Failed, Try Signing In Again
+            </div>
+          )}
+
           {/* Sign in card */}
           <div className="space-y-4">
-            {hasError && (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                Sign In Failed, Try Signing In Again
-              </div>
-            )}
             <Button
               variant="outline"
               className="w-full h-12 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all"

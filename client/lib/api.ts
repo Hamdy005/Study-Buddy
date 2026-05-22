@@ -1,3 +1,5 @@
+import { supabase } from '@/lib/supabase'
+
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
 
 export interface User {
@@ -54,28 +56,61 @@ export interface ChatSession {
   updated_at: string
 }
 
-async function fetchAPI<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
-
+function buildHeaders(token: string | null): HeadersInit {
   const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
-  
-  const headers: HeadersInit = {
+  return {
     'Content-Type': 'application/json',
     // HF token for private space access goes in standard Authorization header
     ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
     // User JWT goes in custom header if HF token is present, otherwise fallback to Authorization
     ...(!hfToken && token && { Authorization: `Bearer ${token}` }),
     ...(token && { 'X-Auth-Token': token }),
-    ...options.headers,
   }
+}
+
+/** Attempt to refresh the Supabase session and return the new access token, or null. */
+async function refreshToken(): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getSession()
+    const newToken = data.session?.access_token ?? null
+    if (newToken && typeof window !== 'undefined') {
+      localStorage.setItem('auth_token', newToken)
+    }
+    return newToken
+  } catch {
+    return null
+  }
+}
+
+async function fetchAPI<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
-    headers,
+    headers: { ...buildHeaders(token), ...options.headers },
   })
+
+  // ── Token-refresh retry ───────────────────────────────────────────────────
+  // If the server returns 401, the stored JWT is likely expired (e.g. the user
+  // left the tab open overnight).  Ask Supabase to refresh the session and retry
+  // the request once with the new token before surfacing the error.
+  if (response.status === 401) {
+    const freshToken = await refreshToken()
+    if (freshToken) {
+      const retryResponse = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers: { ...buildHeaders(freshToken), ...options.headers },
+      })
+      if (!retryResponse.ok) {
+        const error = await retryResponse.json().catch(() => ({ message: 'An error occurred' }))
+        throw new Error(error.message || error.detail || `HTTP error! status: ${retryResponse.status}`)
+      }
+      return retryResponse.json()
+    }
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: 'An error occurred' }))
@@ -111,20 +146,38 @@ export const materialsAPI = {
   list: () => fetchAPI<Material[]>('/api/materials'),
 
   uploadPDF: async (file: File): Promise<{ material_id: string; title: string; chunks_count: number }> => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
-    const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
+    let token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
-      method: 'POST',
-      headers: {
+    // buildHeaders omits 'Content-Type' for FormData so the browser can set the boundary
+    const makeHeaders = (t: string | null) => {
+      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
+      return {
         ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-        ...(!hfToken && token && { Authorization: `Bearer ${token}` }),
-        ...(token && { 'X-Auth-Token': token }),
-      },
+        ...(!hfToken && t && { Authorization: `Bearer ${t}` }),
+        ...(t && { 'X-Auth-Token': t }),
+      }
+    }
+
+    let response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
+      method: 'POST',
+      headers: makeHeaders(token),
       body: formData,
     })
+
+    // Token-refresh retry (same logic as fetchAPI)
+    if (response.status === 401) {
+      const freshToken = await refreshToken()
+      if (freshToken) {
+        token = freshToken
+        response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
+          method: 'POST',
+          headers: makeHeaders(token),
+          body: formData,
+        })
+      }
+    }
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: 'Failed to upload PDF' }))
