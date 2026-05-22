@@ -89,6 +89,7 @@ export default function DashboardPage() {
   const [renameInput, setRenameInput] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const [activeTab, setActiveTab] = useState('pdf')
+
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [isSelectionMode, setIsSelectionMode] = useState(false)
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
@@ -104,6 +105,7 @@ export default function DashboardPage() {
   const pendingUploadTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const expiredPendingUploadsRef = useRef<Record<string, true>>({})
   const prevTokenRef = useRef<string | null>(null)
+  const longPressTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   // Track local title overrides so polling never wipes user renames
   const localTitlesRef = useRef<Record<string, string>>({})
@@ -849,7 +851,8 @@ export default function DashboardPage() {
                       className={cn(
                         "group transition-all duration-300 relative overflow-hidden",
                         isTemp ? "opacity-70 cursor-not-allowed border-dashed" : "cursor-pointer hover:shadow-lg hover:border-primary/30",
-                        selectedIds.includes(material.id) && "border-primary ring-1 ring-primary/30"
+                        selectedIds.includes(material.id) && "border-primary ring-1 ring-primary/30",
+                        "touch-manipulation select-none sm:select-auto"
                       )}
                       onClick={() => {
                         if (isTemp) return
@@ -857,6 +860,34 @@ export default function DashboardPage() {
                           toggleSelection(material.id)
                         } else {
                           router.push(`/material/${material.id}`)
+                        }
+                      }}
+                      onTouchStart={() => {
+                        if (isTemp || isSelectionMode) return
+                        longPressTimersRef.current[material.id] = setTimeout(() => {
+                          delete longPressTimersRef.current[material.id]
+                          if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+                            window.navigator.vibrate(50)
+                          }
+                          enterSelectionMode(material.id)
+                        }, 500)
+                      }}
+                      onTouchEnd={() => {
+                        if (longPressTimersRef.current[material.id]) {
+                          clearTimeout(longPressTimersRef.current[material.id])
+                          delete longPressTimersRef.current[material.id]
+                        }
+                      }}
+                      onTouchMove={() => {
+                        if (longPressTimersRef.current[material.id]) {
+                          clearTimeout(longPressTimersRef.current[material.id])
+                          delete longPressTimersRef.current[material.id]
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        // Prevent context menu from appearing on long press on touch devices
+                        if (!isSelectionMode && typeof window !== 'undefined' && window.innerWidth < 768) {
+                           e.preventDefault()
                         }
                       }}
                     >
@@ -894,7 +925,7 @@ export default function DashboardPage() {
                             {!isTemp && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
                                     <MoreHorizontal className="h-4 w-4" />
                                   </Button>
                                 </DropdownMenuTrigger>

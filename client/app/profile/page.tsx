@@ -113,18 +113,14 @@ export default function ProfilePage() {
 
   const handleThemeChange = async (newTheme: 'light' | 'dark' | 'system') => {
     setNextTheme(newTheme)
-    try {
-      // Save theme to DB
-      await authAPI.updateProfile({ theme: newTheme })
-      // Update local context
-      updateUser({ theme: newTheme })
-      toast.success(`Theme changed to ${newTheme}`)
-    } catch (err) {
-      console.error('Failed to save theme preference:', err)
-      toast.error('Failed to save theme preference')
-    }
-  }
+    updateUser({ theme: newTheme })
 
+    // Save to DB in background — don't await in the UI thread
+    authAPI.updateProfile({ theme: newTheme }).catch((err) => {
+    console.error('Failed to save theme preference:', err)
+
+  })
+  }
   const handleDeleteAccount = async () => {
     setIsDeleting(true)
     try {
