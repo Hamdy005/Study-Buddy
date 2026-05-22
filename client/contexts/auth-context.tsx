@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useTheme } from 'next-themes'
 import { supabase } from '@/lib/supabase'
 import { authAPI } from '@/lib/api'
@@ -228,7 +228,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        logout()
+        // Do local cleanup only — do NOT call logout() here because logout()
+        setUser(null)
+        setToken(null)
+        localStorage.removeItem('auth_token')
+        localStorage.removeItem(PROFILE_CACHE_KEY)
+        localStorage.removeItem('cached_materials')
+        bustProfileCache()
         return
       }
       if (!session) {
@@ -251,14 +257,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const login = (userData: UserData, authToken: string) => {
+  const login = useCallback((userData: UserData, authToken: string) => {
     setUser(userData)
     setToken(authToken)
     localStorage.setItem('auth_token', authToken)
     setCachedProfile(userData) // also updates display cache
-  }
+  }, [])
 
-  const logout = () => {
+  const logout = useCallback(() => {
     supabase.auth.signOut().catch(() => {})
     setUser(null)
     setToken(null)
@@ -269,16 +275,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // NOTE: We intentionally do NOT remove per-user display caches on logout.
     // Each cache is keyed by user ID (auth_display_<uid>), contains no sensitive data,
     // and allows each account's name/avatar to appear instantly on next sign-in.
-  }
+  }, [])
 
-  const updateUser = (data: Partial<UserData>) => {
-    if (!user) return
-    const updated = { ...user, ...data }
-    setUser(updated)
-    setCachedProfile(updated) // also updates display cache
-    // Bust TTL so the next auth event re-fetches fresh data from the DB
-    bustProfileCache()
-  }
+  const updateUser = useCallback((data: Partial<UserData>) => {
+    setUser(prev => {
+      if (!prev) return prev
+      const updated = { ...prev, ...data }
+      setCachedProfile(updated) // also updates display cache
+      bustProfileCache()
+      return updated
+    })
+  }, [])
 
   return (
     <AuthContext.Provider value={{ user, token, login, logout, updateUser, isLoading }}>
