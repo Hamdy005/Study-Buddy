@@ -226,8 +226,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     syncSupabaseSession()
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) return
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        logout()
+        return
+      }
       const authToken = session.access_token
       setToken(authToken)
       localStorage.setItem('auth_token', authToken)

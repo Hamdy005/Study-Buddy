@@ -155,8 +155,11 @@ async def create_session(
 @router.get("/sessions/{session_id}/messages")
 async def get_messages(
     session_id: str,
-    current_user=Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
 ):
+    session = get_chat_session(session_id)
+    if not session or session.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
     messages = get_session_messages(session_id)
     return messages
 
@@ -167,6 +170,9 @@ async def rename_session(
     body: RenameSessionRequest,
     user_id: str = Depends(get_current_user_id),
 ):
+    session = get_chat_session(session_id)
+    if not session or session.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
     rename_chat_session(session_id, body.title)
     return {"status": "ok"}
 
@@ -176,6 +182,9 @@ async def delete_session(
     session_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
+    session = get_chat_session(session_id)
+    if not session or session.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
     delete_chat_session(session_id)
     return {"status": "ok"}
 
@@ -192,6 +201,9 @@ async def extract_title(
 ):
     try:
         session = get_chat_session(session_id)
+        if not session or session.get("user_id") != user_id:
+            raise HTTPException(403, "Access denied")
+        
         material_title = None
         if session and session.get("material_id"):
             mat = get_material(session["material_id"])

@@ -1,5 +1,6 @@
 'use client'
 
+import DOMPurify from 'dompurify'
 import { useState, useRef, useEffect, use } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -81,29 +82,39 @@ function renderMarkdown(text: string) {
         elements.push(<h3 key={key++} className="font-bold text-base mt-3 mb-1">{content}</h3>)
       }
     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('+ ')) {
-      const content = trimmed.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      const content = DOMPurify.sanitize(trimmed.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
       elements.push(<li key={key++} className="ml-4 list-disc leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed.match(/^\d+\.\s/)) {
       // Remove the number AND any accidental bullets that follow it (ignore ** so we don't break bolding)
-      const content = trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      const content = DOMPurify.sanitize(trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
       elements.push(<li key={key++} className="ml-4 list-decimal leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed === '') {
       elements.push(<div key={key++} className="h-2" />)
     } else {
-      const content = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      elements.push(<p key={key++} className="leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
+      const content = DOMPurify.sanitize(line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
+      elements.push(<p key={key++} dir="auto" className="leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
     }
   }
   return elements
 }
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+}
+
 function printAsPDF(title: string, contentHtml: string) {
+  const safeTitle = escapeHtml(title)
   const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="UTF-8">
-      <title>${title}</title>
+      <title>${safeTitle}</title>
       <style>
         body { font-family: system-ui, -apple-system, sans-serif; padding: 60px 40px; color: #1a1a2e; line-height: 1.6; background: #ffffff; }
         h1 { font-size: 24px; margin-bottom: 8px; color: #0f172a; }
@@ -169,7 +180,7 @@ function printAsPDF(title: string, contentHtml: string) {
         <thead class="print-header"><tr><td><div class="print-header-space"></div></td></tr></thead>
         <tbody>
           <tr><td style="padding: 0 20mm;">
-            <h1>${title}</h1>
+            <h1>${safeTitle}</h1>
             <div class="meta" style="margin-top: 10px;">Exported from Study Buddy on ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
             ${contentHtml}
             <hr>
@@ -208,12 +219,12 @@ function printAsPDF(title: string, contentHtml: string) {
   doc.write(htmlContent);
   doc.close();
 
-  // Clean up iframe after a long delay to ensure print dialog finishes
-  setTimeout(() => {
+  // Clean up iframe after print dialog finishes
+  iframe.contentWindow?.addEventListener('afterprint', () => {
     if (document.body.contains(iframe)) {
       document.body.removeChild(iframe);
     }
-  }, 120000);
+  });
 }
 
 const sourceTypeConfig: Record<string, { icon: React.ElementType; label: string; color: string }> = {
@@ -395,6 +406,7 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
                         if (e.key === 'Enter') handleRename()
                         if (e.key === 'Escape') { setIsRenaming(false); setRenameInput('') }
                       }}
+                      maxLength={200}
                       className="text-xl font-bold h-10 w-64"
                       autoFocus
                     />
@@ -800,7 +812,7 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
 
                         <div className={`space-y-4 ${tightenWidth ? 'max-w-2xl' : 'max-w-3xl'} mx-auto px-4`}>
                           {section.content.map((line, lIdx) => (
-                            <p key={lIdx} className={`text-[19.5px] text-foreground leading-relaxed ${tightenWidth ? 'text-left' : 'text-center'}`}>
+                            <p dir="auto" key={lIdx} className={`text-[19.5px] text-foreground leading-relaxed ${tightenWidth ? 'text-left' : 'text-center'}`}>
                               {line.split('**').map((part, i) =>
                                 i % 2 === 1 ? <strong key={i} className="text-foreground">{part}</strong> : part
                               )}
@@ -841,7 +853,7 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
                               )
                             }
                             return (
-                              <p key={lIdx} className="text-lg text-foreground leading-relaxed">
+                              <p dir="auto" key={lIdx} className="text-lg text-foreground leading-relaxed">
                                 {line.split('**').map((part, i) =>
                                   i % 2 === 1 ? <strong key={i} className="text-foreground">{part}</strong> : part
                                 )}
@@ -1240,6 +1252,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                             if (e.key === 'Escape') { setRenamingSessionId(null); setRenameSessionInput('') }
                           }}
                           onBlur={() => { setRenamingSessionId(null); setRenameSessionInput('') }}
+                          maxLength={200}
                           className="text-sm h-8 py-1 px-2"
                           autoFocus
                         />
@@ -1329,7 +1342,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                         : 'bg-card border border-border/50 text-foreground rounded-tl-none'
                       }`}>
                       {m.role === 'user' ? (
-                        <p className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                        <p dir="auto" className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
                       ) : (
                         <div className="text-[16.25px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
                           {renderMarkdown(m.content)}

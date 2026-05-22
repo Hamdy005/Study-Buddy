@@ -320,11 +320,18 @@ def save_summary(material_id: str, user_id: str, summary: str,
         "time_taken": time_taken,
         "model_name": model_name,
     }
-    existing = _table_supabase("summaries").select("*").eq("material_id", material_id).execute()
-    if existing.data:
-        _table_supabase("summaries").update(data).eq("material_id", material_id).execute()
+    # Single atomic upsert — eliminates the race between select→insert/update
+    # under concurrent summarization requests (both see no row → both insert → 500).
+    client = _db()
+    if client is not None:
+        _robust_execute(client.table("summaries").upsert(data, on_conflict="material_id"))
     else:
-        _table_supabase("summaries").insert(data).execute()
+        # Offline / dev fallback: manual check-then-write (no concurrency risk in dev)
+        existing = _FakeTable("summaries").select("*").eq("material_id", material_id).execute()
+        if existing.data:
+            _FakeTable("summaries").update(data).eq("material_id", material_id).execute()
+        else:
+            _FakeTable("summaries").insert(data).execute()
 
 
 def get_summary(material_id: str) -> Optional[dict]:
@@ -365,14 +372,13 @@ def save_quiz(user_id: str, material_id: Optional[str], source_type: str,
 
 
 def get_quizzes(material_id: Optional[str] = None, user_id: Optional[str] = None) -> list[dict]:
-    tbl = _table_supabase("quizzes")
-    result = tbl.select("*").execute()
-    records = result.data
-    if material_id:
-        records = [r for r in records if r.get("material_id") == material_id]
+    query = _table_supabase("quizzes").select("*")
     if user_id:
-        records = [r for r in records if r.get("user_id") == user_id]
-    return records
+        query = query.eq("user_id", user_id)
+    if material_id:
+        query = query.eq("material_id", material_id)
+    result = _robust_execute(query)
+    return result.data
 
 
 # ── Users (maps to Supabase `profiles` table) ─────────
@@ -638,57 +644,61 @@ def get_or_create_memory(memory_id: Optional[str] = None, seed_messages: list[di
 def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 10) -> bool:
     """
     Returns True if request is allowed, False if limit exceeded.
-    Excludes Admin Emails from Limits
+    Excludes Admin Emails from Limits.
+
+    Uses a single atomic SQL UPDATE via Supabase RPC to eliminate the
+    check-then-increment race condition (two concurrent reads both see
+    count=9, both pass, both increment → 11th request gets through).
     """
-    # Exclude specific email from rate limiting
-    if email in ADMIN_EMAILS:
+    # Guard: never apply limit to admin emails
+    if email and email in ADMIN_EMAILS:
         return True
 
-    today = date.today().isoformat()
+    client = _db()
+    if client is not None:
+        try:
+            result = client.rpc(
+                "increment_daily_limit",
+                {"p_user_id": user_id, "p_limit": limit},
+            ).execute()
+            if not result.data:
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Atomic rate-limit RPC failed, falling back to two-query path: {e}")
+            # Fall through to the two-query fallback below
 
+    # ── Offline / dev fallback (also used when RPC call above raises) ──────────
+    # This path has a theoretical race condition but is acceptable for single-
+    # worker dev environments where the RPC is not available.
+    today = date.today().isoformat()
     try:
-        # Get current profile
         result = _robust_execute(
             _table_supabase("profiles")
             .select("daily_requests, last_request_date")
             .eq("id", user_id)
-            
         )
-        
-        # If no profile or data, allow (or we could create one, but usually it exists)
         if not result.data:
             return True
-        
-        # Handle both single object or list response from maybe_single/execute
         profile = result.data[0] if result.data else None
         if not profile:
             return True
 
         last_date = profile.get("last_request_date")
         count = profile.get("daily_requests", 0) or 0
-
-        # Reset count if it's a new day
         if last_date != today:
             count = 0
-
-        # Check limit
         if count >= limit:
             return False
 
-        # Increment
         _robust_execute(
             _table_supabase("profiles")
-            .update({
-                "daily_requests": count + 1,
-                "last_request_date": today,
-            })
+            .update({"daily_requests": count + 1, "last_request_date": today})
             .eq("id", user_id)
         )
         return True
     except Exception as e:
-        # If DB fails, we default to allowing the request to not break the app
-        import logging
-        logging.getLogger(__name__).error(f"Rate limit check failed: {e}")
+        logger.error(f"Rate limit check failed: {e}")
         return True
 
 

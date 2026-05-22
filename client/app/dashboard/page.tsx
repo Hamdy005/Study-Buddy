@@ -95,6 +95,7 @@ export default function DashboardPage() {
   const [isBulkDeleteDialogOpen, setIsBulkDeleteDialogOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<string[] | null>(null)
+  const [isAddingTopic, setIsAddingTopic] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -102,6 +103,7 @@ export default function DashboardPage() {
   const loadCounterRef = useRef(0)
   const pendingUploadTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const expiredPendingUploadsRef = useRef<Record<string, true>>({})
+  const prevTokenRef = useRef<string | null>(null)
 
   // Track local title overrides so polling never wipes user renames
   const localTitlesRef = useRef<Record<string, string>>({})
@@ -211,6 +213,9 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
+    if (token === prevTokenRef.current) return
+    prevTokenRef.current = token
+
     const cached = localStorage.getItem('cached_materials')
     if (cached) {
       try {
@@ -222,6 +227,10 @@ export default function DashboardPage() {
       } catch { }
     }
     loadMaterials()
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
   }, [token])
 
   const loadMaterials = async () => {
@@ -464,14 +473,17 @@ export default function DashboardPage() {
       return
     }
 
-    setIsUploadOpen(false)
+    setIsAddingTopic(true)
     try {
       await materialsAPI.addTopic(topicInput.trim())
       toast.success('Topic added successfully!')
       setTopicInput('')
+      setIsUploadOpen(false)
       loadMaterials()
     } catch (err: unknown) {
       toast.error('Failed to add topic')
+    } finally {
+      setIsAddingTopic(false)
     }
   }
 
@@ -723,11 +735,11 @@ export default function DashboardPage() {
                       </div>
                       <Button
                         onClick={handleTopicSubmit}
-                        disabled={!topicInput.trim()}
+                        disabled={!topicInput.trim() || isAddingTopic}
                         className="w-full"
                       >
-                        <SquarePen className="mr-2 h-4 w-4" />
-                        Add Topic
+                        {isAddingTopic ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <SquarePen className="mr-2 h-4 w-4" />}
+                        {isAddingTopic ? 'Adding Topic...' : 'Add Topic'}
                       </Button>
                     </TabsContent>
                   </Tabs>

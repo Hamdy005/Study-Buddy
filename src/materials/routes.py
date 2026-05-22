@@ -36,7 +36,7 @@ def _validate_pdf_upload(file: UploadFile) -> None:
     if size is not None and size > MAX_SIZE_BYTES:
         raise HTTPException(400, "File too large")
     if size is None:
-        raise HTTPException(400, "File too large")
+        raise HTTPException(400, "Could not determine file size")
 
 class URLInput(BaseModel):
     url: str
@@ -247,13 +247,18 @@ async def create_topic(
     body: TopicRequest,
     user_id: str = Depends(get_current_user_id)
 ):
-    if is_title_taken(body.topic, user_id=user_id):
-        raise HTTPException(409, "You already have a material with this title")
-    mat = create_material(
-        user_id=user_id,
-        title=body.topic.strip(),
-        source_type="topic"
-    )
+    # Rely on the DB-level UNIQUE constraint on (user_id, title)
+    try:
+        mat = create_material(
+            user_id=user_id,
+            title=body.topic.strip(),
+            source_type="topic"
+        )
+    except APIError as e:
+        # Supabase raises APIError with code "23505" on unique-constraint violations
+        if "23505" in str(e) or "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(409, "You already have a material with this title")
+        raise HTTPException(500, f"Failed to create topic: {e}")
     update_material_status(mat["id"], "ready", "Topic ready")
     return {"material_id": mat["id"], "title": mat["title"]}
 
@@ -267,13 +272,6 @@ def search_materials(
     body: SearchRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    # Debug logs
-    headers = {k.lower(): v for k, v in request.headers.items()}
-    logger.info(f"[search] user_id={user_id}")
-    logger.info(f"[search] x-auth-token present: {'x-auth-token' in headers}")
-    logger.info(f"[search] authorization present: {'authorization' in headers}")
-    logger.info(f"[search] query={body.q}")
-
     supabase = get_supabase()
     if not supabase:
         return {"results": []}
@@ -283,7 +281,6 @@ def search_materials(
         {"p_query": body.q, "p_user_id": user_id}
     ).execute()
 
-    logger.info(f"[search] RPC returned {len(result.data)} results: {result.data}")
     return {"results": result.data}
     
 @router.delete("/{material_id}")

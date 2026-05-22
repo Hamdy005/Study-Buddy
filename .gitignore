@@ -16,3 +16,4 @@ client/.env.local
 manage_supabase.py
 dev.sh
 src/README.md
+test.md

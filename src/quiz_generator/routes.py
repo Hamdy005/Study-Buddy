@@ -142,4 +142,8 @@ async def load_results(
     quiz_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
+    # Verify the quiz belongs to the requesting user before returning results
+    quizzes = get_quizzes(user_id=user_id)
+    if not any(q.get("id") == quiz_id for q in quizzes):
+        raise HTTPException(403, "Access denied")
     return get_quiz_results(quiz_id)

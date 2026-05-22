@@ -77,7 +77,7 @@ async def store_embeddings_async(material_id: str, chunk_ids: list[str], chunks:
     await embedding_queue.put(job)
     await job.done.wait()
 
-    entry = job_store[job.job_id]
+    entry = job_store.pop(job.job_id)
     if entry["status"] == "error":
         raise RuntimeError(f"Embedding failed: {entry['error']}")
 
