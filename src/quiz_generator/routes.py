@@ -62,6 +62,8 @@ async def generate_quiz(
             if not topic_title and body.material_id:
                 mat = get_material(body.material_id)
                 if mat:
+                    if mat.get("user_id") != user_id:
+                        raise HTTPException(403, "Access denied")
                     topic_title = mat.get("title")
             
             if not topic_title:
@@ -82,6 +84,8 @@ async def generate_quiz(
             mat = get_material(body.material_id) if body.material_id else None
             if not mat:
                 raise HTTPException(400, f"No {body.source_type} material found")
+            if mat.get("user_id") != user_id:
+                raise HTTPException(403, "Access denied")
 
             chunks_list = get_chunks(body.material_id)
             chunks_texts = [c["content"] for c in chunks_list] if chunks_list else []

@@ -42,6 +42,7 @@ class TutorResponse(BaseModel):
 @router.post("/ask", response_model=TutorResponse)
 async def ask_tutor(
     body: TutorQuery,
+    user_id: str = Depends(get_current_user_id),
     current_user=Depends(get_current_user),
 ):
     if not body.query.strip():
@@ -73,6 +74,8 @@ async def ask_tutor(
             mat = get_material(body.material_id) if body.material_id else None
             if not mat:
                 raise HTTPException(400, f"No {body.source_type} material found. Upload one first.")
+            if mat.get("user_id") != user_id:
+                raise HTTPException(403, "Access denied")
 
             material_id = body.material_id
             

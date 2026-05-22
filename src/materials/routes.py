@@ -57,6 +57,8 @@ def get_material_by_id(
     mat = get_material(material_id)
     if not mat:
         raise HTTPException(404, "Material not found")
+    if mat.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
     return mat
 
 async def _process_pdf_background(material_id: str, file_content: bytes):

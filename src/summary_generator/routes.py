@@ -36,6 +36,8 @@ async def generate_summary(
     mat = get_material(body.material_id)
     if not mat:
         raise HTTPException(404, "Material not found")
+    if mat.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
 
     try:
         start = time.time()
@@ -74,6 +76,10 @@ async def get_material_summary(
     user_id: str = Depends(get_current_user_id),
     current_user=Depends(get_current_user),
 ):
+    mat = get_material(material_id)
+    if not mat or mat.get("user_id") != user_id:
+        raise HTTPException(403, "Access denied")
+
     summary = get_stored_summary(material_id)
     if not summary:
         logger.info("no summary found")
