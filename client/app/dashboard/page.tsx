@@ -558,9 +558,13 @@ export default function DashboardPage() {
 
   const toggleSelection = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
-    setSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-    )
+    if (selectedIds.length === 1 && selectedIds[0] === id) {
+      exitSelectionMode()
+    } else {
+      setSelectedIds(prev =>
+        prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+      )
+    }
   }
 
   const enterSelectionMode = (id: string) => {
@@ -575,7 +579,7 @@ export default function DashboardPage() {
 
   const toggleSelectAll = () => {
     if (selectedIds.length === displayMaterials.length) {
-      setSelectedIds([])
+      exitSelectionMode()
     } else {
       setSelectedIds(displayMaterials.map(m => m.id))
     }
