@@ -79,7 +79,8 @@ async def get_current_user_id(request: Request) -> str:
     try:
         user = _verify_token_cached(client, token)
         return str(user.id)
-    except Exception:
+    except Exception as e:
+        print(f"Token validation error: {e}")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
 
 
@@ -98,7 +99,8 @@ async def get_current_user(request: Request) -> Any:
             user = _verify_token_cached(client, token)
             if user:
                 return user
-        except Exception:
+        except Exception as e:
+            print(f"Token validation error: {e}")
             pass
 
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
