@@ -4,30 +4,35 @@ import uuid
 import logging
 from functools import lru_cache
 from typing import Optional
-from pydantic import BaseModel, Field
 from langchain_core.tools import Tool
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
-from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_community.tools import ArxivQueryRun, WikipediaQueryRun, DuckDuckGoSearchResults
 from langchain_core.tools.retriever import create_retriever_tool
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_community.utilities import ArxivAPIWrapper, WikipediaAPIWrapper
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.config import settings
 from src.database import get_supabase
 from src.store import get_chunks, get_material
+from .constants import (
+    EMBEDDING_DIM,
+    RAG_PROMPT_TEMPLATE_BASE,
+    CHAT_TITLE_PROMPT_TEMPLATE,
+)
+from .schemas import SearchInput, EmbeddingJob
 
 logger = logging.getLogger(__name__)
 
 
 # ── Embeddings ─────────────────────────────────────────
 
-EMBEDDING_DIM = 384
 
 @lru_cache
 def get_embedder():
@@ -70,7 +75,8 @@ async def store_embeddings_async(material_id: str, chunk_ids: list[str], chunks:
     Async variant of store_embeddings that routes embedding inference through
     the batch worker queue for batching across concurrent requests.
     """
-    from src.rag.batch_workers import EmbeddingJob, embedding_queue, job_store
+    from src.rag.batch_workers import embedding_queue, job_store
+    from .schemas import EmbeddingJob
 
     job = EmbeddingJob(job_id=str(uuid.uuid4()), texts=chunks)
     job_store[job.job_id] = {"status": "pending", "result": None, "error": None}
@@ -128,15 +134,14 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
 # ── LLM ────────────────────────────────────────────────
 
 def get_llm():
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise ValueError("OPENROUTER_API_KEY not found. Please set it in config.env.")
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
     logger.info(f"Initializing LLM with model: {settings.model_name}")
-    return ChatOpenAI(
+    return ChatGoogleGenerativeAI(
         model=settings.model_name,
-        base_url=settings.openrouter_base_url,
-        api_key=settings.openrouter_api_key,
+        api_key=settings.gemini_api_key,
         temperature=0.3,
-        max_tokens=2000,
+        max_output_tokens=2000,
         timeout=120,
     )
 
@@ -153,9 +158,6 @@ def get_groq_llm():
 
 
 # ── Web Search Tools ───────────────────────────────────
-
-class SearchInput(BaseModel):
-    query: str = Field(description="The search query or topic to look up")
 
 def web_search_tools(has_material: bool = False):
 
@@ -248,46 +250,18 @@ def _rag_prompt(has_web_tools: bool = True, has_knowledge_retriever: bool = Fals
     
     tools_section = ""
     if tools_list:
-        tools_section = "\nYou have access to these tools:\n" + "\n".join(tools_list)
+        tools_section = "\n<tools>\nYou have access to these tools:\n" + "\n".join(tools_list) + "\n</tools>"
 
     subject_line = f"\nYour current study topic is: **{subject}**." if subject else ""
 
+    formatted_template = RAG_PROMPT_TEMPLATE_BASE.format(
+        subject_line=subject_line,
+        tools_section=tools_section
+    )
+
     return PromptTemplate(
         input_variables=["chat_history", "input", "agent_scratchpad", "context"],
-        template=f"""
-You are a helpful AI study assistant. Your goal is to provide accurate, well-reasoned answers.{subject_line}
-
-## Context Information
-{{context}}
-{tools_section}
-
-## Instructions:
-- Use the available context and tools to answer the user's question as thoroughly as possible.
-- If context is provided, you MUST use it to answer questions.
-- If the context partially answers the question, explain what you know and note any limitations.
-- If the context and tools don't contain enough information, use your own knowledge to provide a helpful response and mention that it's based on general knowledge.
-- Always provide educational value - explain concepts clearly.
-- If the current study topic appears to be a random string, dummy name, or completely un-understandable gibberish, politely inform the user: "I don't recognize a subject with that name. Please rename your subject topic or specify it clearly here."
-
-## STRICT FORMATTING RULES:
-- IMPORTANT: DO NOT include the labels "Context:", "Instructions:", "Agent Scratchpad:", or "Available tools:" in your final response.
-- CRITICAL: DO NOT repeat the user's query and don't output JSON tool invocations in your final answer. Provide only the plain text explanation.
-- DO NOT use markdown tables or pipe characters (|)
-- DO NOT use separator lines (---, ===)
-- Begin your main response directly or use clear section labels like "Answer:" and "Key Takeaway:"
-- Use **Text** for important keywords, topics, or terms you want to highlight
-- Use numbered lists or bullet points (with a dash -) instead of tables
-
----
-### Chat History:
-{{chat_history}}
-
-### User Query:
-{{input}}
-
-### Agent Scratchpad:
-{{agent_scratchpad}}
-""",
+        template=formatted_template,
     )
 
 
@@ -356,7 +330,7 @@ def rag_answer(
     prompt = _rag_prompt(has_web_tools=len(tools) > 0, has_knowledge_retriever=has_knowledge, subject=subject_title)
 
     if tools:
-        agent = create_openai_tools_agent(llm, tools, prompt)
+        agent = create_tool_calling_agent(llm, tools, prompt)
         executor = AgentExecutor(
             agent=agent,
             tools=tools,
@@ -395,9 +369,11 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     if material_title:
         topic_context = f"\nNote: The user is discussing the topic '{material_title}'. If their query uses pronouns like 'its' or 'this', assume it refers to this topic. If the topic name '{material_title}' appears to be a random string or dummy name, do not use it directly; instead, create a general title related to their query, such as 'Types of the topic' or 'Elements of the topic'."
 
+    formatted_template = CHAT_TITLE_PROMPT_TEMPLATE.format(topic_context=topic_context)
+
     prompt = PromptTemplate(
         input_variables=["query"],
-        template=f"Generate a very short, concise title (3-5 words max) for a chat session that starts with this user query: '{{query}}'.{topic_context}\nDo not use quotes or prefixes like 'Title:', just the title itself."
+        template=formatted_template
     )
     chain = prompt | llm
     response = chain.invoke({"query": query})

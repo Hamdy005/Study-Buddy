@@ -29,7 +29,7 @@ const features = [
   {
     icon: Sparkles,
     title: 'Powered by AI',
-    desc: '10 daily AI generations (summary + quiz) with unlimited material chat.',
+    desc: '20 daily AI generations (summary + quiz) with unlimited material chat.',
   },
 ]
 
@@ -189,7 +189,7 @@ export default function HomePage() {
           {/* Stats row */}
           <div className="grid grid-cols-3 gap-3 pt-4 border-t border-border/40">
             {[
-              { value: '10', label: 'Daily generations' },
+              { value: '20', label: 'Daily generations' },
               { value: 'Free', label: 'to get started' },
               { value: '∞', label: 'Chat messages' },
             ].map((stat) => (

@@ -78,7 +78,7 @@ After generation, the summary is displayed as a **well-structured document** wit
 
 ### Rate Limits
 
-- **Summary & Quiz generation** — 10 requests per day per user (uses OpenRouter).
+- **Summary & Quiz generation** — 20 requests per day per user (uses Google Gemini API).
 - **Chatbot** — unlimited requests (uses Groq).
 
 ---
@@ -133,7 +133,7 @@ After generation, the summary is displayed as a **well-structured document** wit
 | Frontend | Next.js (Vercel + custom domain) |
 | Backend | FastAPI (Python) |
 | Database & Vector Store | Supabase |
-| Summary & Quiz Model | `openai/gpt-oss-120b` via OpenRouter API |
+| Summary & Quiz Model | `gemini-3.1-flash-lite` via Google Gemini API |
 | Chatbot Model | `llama-3.1-8b-instant` via Groq API |
 | Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Auth | Google OAuth |

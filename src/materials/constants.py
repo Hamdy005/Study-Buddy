@@ -1,0 +1,3 @@
+ALLOWED_TYPES = {"application/pdf"}
+MAX_SIZE_MB = 10
+MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024

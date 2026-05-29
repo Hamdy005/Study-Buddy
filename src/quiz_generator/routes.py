@@ -1,31 +1,22 @@
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 from typing import Optional
-
 from src.quiz_generator.quiz import smart_quiz_generator
 from src.store import get_material, get_chunks, get_summary, save_quiz, get_quizzes, save_quiz_result, get_quiz_results, check_and_increment_daily_limit
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
+from .schemas import QuizRequest, QuizResponse, SaveQuizResultRequest
+from .constants import (
+    MIN_MCQ_COUNT,
+    MAX_MCQ_COUNT,
+    MIN_TF_COUNT,
+    MAX_TF_COUNT,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/quiz", tags=["Quiz"])
-
-
-class QuizRequest(BaseModel):
-    difficulty: str = "Medium"
-    mcq_count: int = 4
-    tf_count: int = 3
-    source_type: str = "web"
-    material_id: Optional[str] = None
-    topic: Optional[str] = None
-
-
-class QuizResponse(BaseModel):
-    quiz: dict
-    quiz_id: str
 
 
 @router.get("/list")
@@ -44,14 +35,14 @@ async def generate_quiz(
 ):
     # Rate limit check
     user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-    if not check_and_increment_daily_limit(user_id, email=user_email, limit=10):
-        raise HTTPException(429, "Daily limit of 10 requests reached. Come back tomorrow!")
+    if not check_and_increment_daily_limit(user_id, email=user_email, limit=20):
+        raise HTTPException(429, "Daily limit of 20 requests reached. Come back tomorrow!")
 
     body.difficulty = body.difficulty.capitalize()
-    if body.mcq_count < 1 or body.mcq_count > 20:
-        raise HTTPException(400, "MCQ count must be between 1 and 20")
-    if body.tf_count < 1 or body.tf_count > 20:
-        raise HTTPException(400, "True/False count must be between 1 and 20")
+    if body.mcq_count < MIN_MCQ_COUNT or body.mcq_count > MAX_MCQ_COUNT:
+        raise HTTPException(400, f"MCQ count must be between {MIN_MCQ_COUNT} and {MAX_MCQ_COUNT}")
+    if body.tf_count < MIN_TF_COUNT or body.tf_count > MAX_TF_COUNT:
+        raise HTTPException(400, f"True/False count must be between {MIN_TF_COUNT} and {MAX_TF_COUNT}")
 
     try:
         quiz = None
@@ -125,11 +116,6 @@ async def generate_quiz(
     except Exception as e:
         logger.error(f"Quiz generation failed: {str(e)}", exc_info=True)
         raise HTTPException(500, f"Quiz generation failed: {e}")
-
-
-class SaveQuizResultRequest(BaseModel):
-    quiz_id: str
-    result_data: dict
 
 
 @router.post("/save-result")

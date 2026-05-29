@@ -10,10 +10,7 @@ load_dotenv(ENV_PATH)
 
 
 class Settings:
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_base_url: str = os.getenv(
-        "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-    )
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     # Accept both plain and NEXT_PUBLIC_ prefixed names (config.env uses NEXT_PUBLIC_)
     supabase_url: str = (
         os.getenv("SUPABASE_URL")
@@ -28,7 +25,7 @@ class Settings:
         or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
     )
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    model_name: str = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
+    model_name: str = os.getenv("MODEL_NAME", "gemini-3.1-flash-lite")
     transformers_no_tf: str = os.getenv("TRANSFORMERS_NO_TF", "1")
     cors_allowed_origins: list[str] = [
         origin.strip()
@@ -40,10 +37,8 @@ class Settings:
 @lru_cache()
 def get_settings() -> Settings:
     s = Settings()
-    if s.openrouter_api_key:
-        os.environ["OPENROUTER_API_KEY"] = s.openrouter_api_key
-    if s.openrouter_base_url:
-        os.environ["OPENROUTER_BASE_URL"] = s.openrouter_base_url
+    if s.gemini_api_key:
+        os.environ["GEMINI_API_KEY"] = s.gemini_api_key
     if "TRANSFORMERS_NO_TF" not in os.environ and s.transformers_no_tf:
         os.environ["TRANSFORMERS_NO_TF"] = s.transformers_no_tf
     return s

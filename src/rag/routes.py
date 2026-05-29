@@ -2,7 +2,6 @@ import time
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 from typing import Optional, Any
 
 from src.rag.rag import rag_answer, extract_chat_title
@@ -18,25 +17,11 @@ from src.store import (
     save_chat_messages, get_chat_messages,
 )
 from src.summary_generator.summary import clean_summary
+from .schemas import TutorQuery, TutorResponse, SessionRequest, RenameSessionRequest, ExtractTitleRequest, SaveChatRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tutor", tags=["Tutor"])
-
-
-class TutorQuery(BaseModel):
-    query: str
-    source_type: str = "web"
-    material_id: Optional[str] = None
-    session_id: Optional[str] = None   # preferred
-    memory_id: Optional[str] = None    # legacy fallback
-
-
-class TutorResponse(BaseModel):
-    answer: str
-    source: str
-    time_taken: float
-    memory_id: str
 
 
 @router.post("/ask", response_model=TutorResponse)
@@ -121,12 +106,6 @@ async def ask_tutor(
 
 # ── Chat Session Routes ──────────────────────────────────
 
-class SessionRequest(BaseModel):
-    material_id: str
-    title: Optional[str] = "Chat Session"
-
-class RenameSessionRequest(BaseModel):
-    title: str
 
 @router.get("/sessions")
 async def list_sessions(
@@ -191,11 +170,6 @@ async def delete_session(
     delete_chat_session(session_id)
     return {"status": "ok"}
 
-
-class ExtractTitleRequest(BaseModel):
-    query: str
-
-
 @router.post("/sessions/{session_id}/extract-title")
 async def extract_title(
     session_id: str,
@@ -223,10 +197,6 @@ async def extract_title(
 
 
 # ── Legacy save/load chat (kept for backward compat) ────
-
-class SaveChatRequest(BaseModel):
-    material_id: str
-    messages: list[dict[str, Any]]
 
 
 @router.post("/chat/save")

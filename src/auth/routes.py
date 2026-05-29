@@ -1,12 +1,14 @@
 import uuid
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends
+from typing import Optional
 
 from src.database import get_auth_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
 from src.dependencies import get_current_user_id, get_current_user
-from fastapi import Depends
-from typing import Optional
+from .schemas import ProfileUpdateRequest
+
+PLACEHOLDER_DOMAINS = ["@placeholder.ai", "@studymate.ai"]
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -14,12 +16,6 @@ router = APIRouter(prefix="/api/auth", tags=["Auth"])
 async def delete_account(user_id: str = Depends(get_current_user_id)):
     delete_user_data(user_id)
     return {"status": "success", "message": "Account data deleted"}
-
-
-class ProfileUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    theme: Optional[str] = None
 
 
 @router.get("/profile")
@@ -34,8 +30,7 @@ async def get_profile(
     is_placeholder = (
         not user
         or not email
-        or "@placeholder.ai" in email
-        or "@studymate.ai" in email
+        or any(domain in email for domain in PLACEHOLDER_DOMAINS)
     )
 
     if is_placeholder:

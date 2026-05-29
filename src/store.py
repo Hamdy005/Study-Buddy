@@ -394,8 +394,8 @@ def _map_profile(profile: dict) -> dict:
         "theme": profile.get("theme", "system"),
         "usage": {
             "used": used,
-            "limit": 10,
-            "remaining": max(0, 10 - used)
+            "limit": 20,
+            "remaining": max(0, 20 - used)
         }
     }
 
@@ -641,7 +641,7 @@ def get_or_create_memory(memory_id: Optional[str] = None, seed_messages: list[di
     return mem, mid
 
 
-def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 10) -> bool:
+def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
     """
     Returns True if request is allowed, False if limit exceeded.
     Excludes Admin Emails from Limits.
@@ -714,20 +714,20 @@ def get_usage(user_id: str) -> dict:
             .eq("id", user_id)
         )
         if not result.data:
-            return {"used": 0, "limit": 10, "remaining": 10}
+            return {"used": 0, "limit": 20, "remaining": 20}
 
         profile = result.data[0]
         if not profile:
-            return {"used": 0, "limit": 10, "remaining": 10}
+            return {"used": 0, "limit": 20, "remaining": 20}
 
         used = profile.get("daily_requests", 0) if profile.get("last_request_date") == today else 0
         return {
             "used": used,
-            "limit": 10,
-            "remaining": max(0, 10 - used)
+            "limit": 20,
+            "remaining": max(0, 20 - used)
         }
     except Exception:
-        return {"used": 0, "limit": 10, "remaining": 10}
+        return {"used": 0, "limit": 20, "remaining": 20}
 
 
 def delete_user_data(user_id: str):

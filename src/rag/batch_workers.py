@@ -13,8 +13,10 @@ import asyncio
 import time
 import uuid
 import logging
-from dataclasses import dataclass, field
 from typing import Any
+
+from .constants import BATCH_MAX_SIZE, BATCH_WINDOW_S, WARMUP_INTERVAL_S
+from .schemas import EmbeddingJob
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +60,6 @@ def is_request_in_flight() -> bool:
     return _request_in_flight_count > 0
 
 
-# ═══════════════════════ Job Dataclasses ════════════════════════
-
-@dataclass
-class EmbeddingJob:
-    """Batch embedding of multiple texts (for store_embeddings)."""
-    job_id: str
-    texts: list[str]
-    done: asyncio.Event = field(default_factory=asyncio.Event)
-
-
 # ═══════════════════════ Queue ════════════════════════
 
 embedding_queue: asyncio.Queue[EmbeddingJob] = asyncio.Queue()
@@ -75,13 +67,10 @@ embedding_queue: asyncio.Queue[EmbeddingJob] = asyncio.Queue()
 
 # ═══════════════════════ Workers ════════════════════════
 
-_BATCH_MAX_SIZE = 8
-_BATCH_WINDOW_S = 0.05
-
 
 async def embedding_worker():
     """
-    Drains up to {_BATCH_MAX_SIZE} embedding jobs every {_BATCH_WINDOW_S * 1000:.0f}ms.
+    Drains up to {BATCH_MAX_SIZE} embedding jobs every {BATCH_WINDOW_S * 1000:.0f}ms.
 
     One SentenceTransformer forward pass per batch:
       1. Collect texts from all jobs in the batch
@@ -100,8 +89,8 @@ async def embedding_worker():
         batch: list[EmbeddingJob] = [first_job]
 
         # Collect up to 7 more within the time window
-        deadline = loop.time() + _BATCH_WINDOW_S
-        while len(batch) < _BATCH_MAX_SIZE:
+        deadline = loop.time() + BATCH_WINDOW_S
+        while len(batch) < BATCH_MAX_SIZE:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
@@ -163,8 +152,6 @@ async def embedding_worker():
 
 # ═══════════════════════ Warmup Loop ════════════════════════
 
-_WARMUP_INTERVAL_S = 300  # 5 minutes
-
 
 async def _warmup_loop():
     """
@@ -178,7 +165,7 @@ async def _warmup_loop():
     loop = asyncio.get_event_loop()
 
     while True:
-        await asyncio.sleep(_WARMUP_INTERVAL_S)
+        await asyncio.sleep(WARMUP_INTERVAL_S)
         if is_request_in_flight():
             continue
         t0 = time.monotonic()

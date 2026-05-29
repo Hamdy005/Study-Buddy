@@ -30,11 +30,6 @@ export function Logo({ className, iconClassName, showText = true, textClassName 
           {/* Shorter Robe/Tassel Line */}
           <path d="M23.5 12 Q24.5 13 24 14.5 Q23.5 15.5 23 16.5" stroke="white" strokeWidth="1.3" strokeLinecap="round" opacity="0.9"/>
           
-          {/* Shorter Robe/Tassel End (shifted up) */}
-          <path d="M22 16.5 Q23 17.5 24 16.5 Q23.5 18.5 22.5 19 Q23 17.5 22 16.5Z" fill="#FCD34D"/>
-          
-          {/* Bottom detail */}
-          <path d="M14 19 Q16 21.5 18 19" stroke="white" strokeWidth="1.1" strokeLinecap="round" opacity="0.5"/>
         </svg>
       </div>
       {showText && (

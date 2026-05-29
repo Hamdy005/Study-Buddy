@@ -2,24 +2,16 @@ import asyncio
 import time
 import logging 
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional
 
 from src.summary_generator.summary import summarizer, web_summarizer
 from src.store import get_material, get_chunks, save_summary, get_summary as get_stored_summary, check_and_increment_daily_limit
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
+from .schemas import SummarizeRequest, SummarizeResponse
+from .constants import MAX_COMBINED_TEXT_LEN
 
 router = APIRouter(prefix="/api/materials", tags=["Summarizer"])
 logger = logging.getLogger(__name__)
-
-class SummarizeRequest(BaseModel):
-    material_id: str
-
-
-class SummarizeResponse(BaseModel):
-    summary: str
-    time_taken: float
 
 
 @router.post("/summarize", response_model=SummarizeResponse)
@@ -30,8 +22,8 @@ async def generate_summary(
 ):
     # Rate limit check
     user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-    if not check_and_increment_daily_limit(user_id, email=user_email, limit=10):
-        raise HTTPException(429, "Daily limit of 10 requests reached. Come back tomorrow!")
+    if not check_and_increment_daily_limit(user_id, email=user_email, limit=20):
+        raise HTTPException(429, "Daily limit of 20 requests reached. Come back tomorrow!")
 
     mat = get_material(body.material_id)
     if not mat:
@@ -51,8 +43,8 @@ async def generate_summary(
             if not chunks_list:
                 raise HTTPException(400, "No text chunks found in this material")
             combined = "\n".join(c["content"] for c in chunks_list)
-            if len(combined) > 80000:
-                combined = combined[:80000]
+            if len(combined) > MAX_COMBINED_TEXT_LEN:
+                combined = combined[:MAX_COMBINED_TEXT_LEN]
             summary = await loop.run_in_executor(None, summarizer, combined)
 
         elapsed = time.time() - start

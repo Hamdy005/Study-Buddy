@@ -3,7 +3,6 @@ import asyncio
 import logging
 import validators
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks, Header, Request
-from pydantic import BaseModel
 from postgrest.exceptions import APIError
 
 from src.materials.text_utils import text_from_pdf, chunk_text, scrap_website
@@ -11,14 +10,13 @@ from src.rag.rag import store_embeddings, store_embeddings_async
 from src.store import create_material, get_material, update_material_status, save_chunks, list_materials, delete_material, rename_material, is_title_taken
 from src.dependencies import get_current_user_id, get_current_user
 from src.database import get_supabase, get_auth_supabase
+from .constants import ALLOWED_TYPES, MAX_SIZE_MB, MAX_SIZE_BYTES
+from .schemas import URLInput, RenameMaterialRequest, BulkDeleteRequest, TopicRequest, SearchRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/materials", tags=["Materials"])
 
-ALLOWED_TYPES = {"application/pdf"}
-MAX_SIZE_MB = 10
-MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
 
 def _validate_pdf_upload(file: UploadFile) -> None:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -38,8 +36,6 @@ def _validate_pdf_upload(file: UploadFile) -> None:
     if size is None:
         raise HTTPException(400, "Could not determine file size")
 
-class URLInput(BaseModel):
-    url: str
 
 @router.get("")
 def get_materials(
@@ -180,11 +176,6 @@ async def scrape_url(
         logger.error(f"scrape_url failed: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to start scraping: {e}")
 
-class RenameMaterialRequest(BaseModel):
-    title: str
-
-class BulkDeleteRequest(BaseModel):
-    material_ids: list[str]
 
 @router.post("/bulk-delete")
 async def bulk_delete_materials(
@@ -241,8 +232,6 @@ async def rename_material_endpoint(
 
     return {"status": "ok"}
 
-class TopicRequest(BaseModel):
-    topic: str
 
 @router.post("/topic")
 async def create_topic(
@@ -265,8 +254,6 @@ async def create_topic(
     return {"material_id": mat["id"], "title": mat["title"]}
 
 
-class SearchRequest(BaseModel):
-    q: str
 
 @router.post("/search")
 def search_materials(
