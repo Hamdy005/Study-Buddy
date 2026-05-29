@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/tooltip'
 
 export function UsageStats() {
-  const { user } = useAuth()
+  const { user, updateUser } = useAuth()
   const [usage, setUsage] = useState<{ used: number; limit: number; remaining: number } | null>(() => {
     // 1. Prefer data from user context (most fresh and pre-fetched)
     if (user?.usage) return user.usage
@@ -34,12 +34,19 @@ export function UsageStats() {
   const [isLoading, setIsLoading] = useState(!usage)
 
   useEffect(() => {
+    if (user?.usage) {
+      setUsage(user.usage)
+    }
+  }, [user?.usage])
+
+  useEffect(() => {
     // If we have usage from user context, we might still want to refresh it occasionally
     // but we can skip the very first loading state.
     const fetchUsage = async () => {
       try {
         const data = await usageAPI.getUsage()
         setUsage(data)
+        updateUser({ usage: data })
         localStorage.setItem('usage_cache', JSON.stringify(data))
       } catch (err) {
         console.error('Failed to fetch usage:', err)
@@ -53,7 +60,7 @@ export function UsageStats() {
     // Refresh every minute to keep it somewhat updated
     const interval = setInterval(fetchUsage, 60000)
     return () => clearInterval(interval)
-  }, [])
+  }, [updateUser])
 
   if (isLoading || !usage) return null
 

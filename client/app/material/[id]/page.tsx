@@ -60,7 +60,8 @@ import { toast } from 'sonner'
 import { Separator } from '@/components/ui/separator'
 import { UserDropdown } from '@/components/user-dropdown'
 import { UsageStats } from '@/components/usage-stats'
-import { materialsAPI, tutorAPI, quizAPI } from '@/lib/api'
+import { useAuth } from '@/contexts/auth-context'
+import { materialsAPI, tutorAPI, quizAPI, usageAPI } from '@/lib/api'
 import type { Material, ChatMessage, QuizQuestion, QuizResult, ChatSession } from '@/lib/api'
 
 function renderMarkdown(text: string) {
@@ -541,6 +542,17 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
 }) {
   const [summary, setSummary] = useState<string | null>(null)
   const [isLoadingExisting, setIsLoadingExisting] = useState(true)
+  const { updateUser } = useAuth()
+
+  const refreshUsage = async () => {
+    try {
+      const data = await usageAPI.getUsage()
+      updateUser({ usage: data })
+      localStorage.setItem('usage_cache', JSON.stringify(data))
+    } catch (err) {
+      console.error('Failed to refresh usage:', err)
+    }
+  }
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isMounted = useRef(true)
@@ -562,6 +574,7 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
           localStorage.removeItem(`generating_summary_${materialId}`)
           clearInterval(pollingRef.current!)
           pollingRef.current = null
+          refreshUsage()
         }
       } catch { }
     }, 4000)
@@ -615,6 +628,7 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
         setSummary(result.summary)
         setIsLoadingExisting(false)
         toast.success('Summary generated!')
+        refreshUsage()
       }
     } catch {
       toast.error('Failed to generate summary. Please try again.')
@@ -1405,6 +1419,17 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [result, setResult] = useState<QuizResult | null>(null)
   const [isLoadingExistingQuiz, setIsLoadingExistingQuiz] = useState(true)
+  const { updateUser } = useAuth()
+
+  const refreshUsage = async () => {
+    try {
+      const data = await usageAPI.getUsage()
+      updateUser({ usage: data })
+      localStorage.setItem('usage_cache', JSON.stringify(data))
+    } catch (err) {
+      console.error('Failed to refresh usage:', err)
+    }
+  }
 
   const clampCount = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1496,6 +1521,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
           }
           setResult(null)
           stopQuizGenerating()
+          refreshUsage()
         }
       } catch { }
     }, 5000)
@@ -1589,6 +1615,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
           setAnswers(readQuizDraft(data.quiz_id, formatted))
           stopQuizGenerating()
           toast.success('Quiz generated!')
+          refreshUsage()
         } else {
           throw new Error('No questions returned')
         }
