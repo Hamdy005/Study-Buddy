@@ -8,6 +8,13 @@ MAX_TF_COUNT = 20
 MAX_SAMPLE_CHUNKS = 10
 RETRIEVER_K = 5
 
+# Web search configuration
+WIKI_TOP_K_RESULTS = 2
+WIKI_DOC_CONTENT_CHARS_MAX = 15000
+
+ARXIV_TOP_K_RESULTS = 4
+ARXIV_DOC_CONTENT_CHARS_MAX = 10000
+
 QUIZ_PROMPT_TEMPLATE = PromptTemplate(
     input_variables=[
         "difficulty", "mcq_count", "tf_count",

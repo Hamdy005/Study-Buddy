@@ -1,7 +1,14 @@
 from langchain.prompts import PromptTemplate
 
 MAX_INPUT_CHARS = 15000
-MAX_COMBINED_TEXT_LEN = 80000
+MAX_COMBINED_TEXT_LEN = 160000
+
+# Web search configuration
+WIKI_TOP_K_RESULTS = 2
+WIKI_DOC_CONTENT_CHARS_MAX = 40000  
+
+ARXIV_TOP_K_RESULTS = 3
+ARXIV_DOC_CONTENT_CHARS_MAX = 25000 
 
 SUMMARIZER_PROMPT_TEMPLATE = PromptTemplate(
     input_variables=["input"],

@@ -2,7 +2,14 @@ import re
 import logging
 from langchain_community.utilities import ArxivAPIWrapper, WikipediaAPIWrapper
 from src.rag.rag import get_llm
-from .constants import SUMMARIZER_PROMPT_TEMPLATE, MAX_INPUT_CHARS
+from .constants import (
+    SUMMARIZER_PROMPT_TEMPLATE,
+    MAX_INPUT_CHARS,
+    WIKI_TOP_K_RESULTS,
+    WIKI_DOC_CONTENT_CHARS_MAX,
+    ARXIV_TOP_K_RESULTS,
+    ARXIV_DOC_CONTENT_CHARS_MAX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +74,10 @@ def web_summarizer(topic: str) -> str:
     all_content = []
 
     try:
-        wiki_api = WikipediaAPIWrapper(top_k_results=2, doc_content_chars_max=6000)
+        wiki_api = WikipediaAPIWrapper(
+            top_k_results=WIKI_TOP_K_RESULTS,
+            doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
+        )
         wiki_content = wiki_api.run(topic)
         if wiki_content and wiki_content.strip():
             all_content.append(f"--- Wikipedia ---\n{wiki_content}")
@@ -75,7 +85,10 @@ def web_summarizer(topic: str) -> str:
         logger.warning(f"Wikipedia search for '{topic}' failed: {e}")
 
     try:
-        arxiv_api = ArxivAPIWrapper(top_k_results=1, doc_content_chars_max=7000)
+        arxiv_api = ArxivAPIWrapper(
+            top_k_results=ARXIV_TOP_K_RESULTS,
+            doc_content_chars_max=ARXIV_DOC_CONTENT_CHARS_MAX,
+        )
         arxiv_content = arxiv_api.run(topic)
         if arxiv_content and arxiv_content.strip():
             all_content.append(f"--- Arxiv ---\n{arxiv_content}")

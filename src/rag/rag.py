@@ -25,6 +25,11 @@ from .constants import (
     EMBEDDING_DIM,
     RAG_PROMPT_TEMPLATE_BASE,
     CHAT_TITLE_PROMPT_TEMPLATE,
+    WIKI_TOP_K_RESULTS,
+    WIKI_DOC_CONTENT_CHARS_MAX,
+    ARXIV_TOP_K_RESULTS,
+    ARXIV_DOC_CONTENT_CHARS_MAX,
+    DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
 )
 from .schemas import SearchInput, EmbeddingJob
 
@@ -159,14 +164,16 @@ def get_groq_llm():
 
 # ── Web Search Tools ───────────────────────────────────
 
-def web_search_tools(has_material: bool = False):
+def web_search_tools(
+    has_material: bool = False,
+    wiki_k: int = WIKI_TOP_K_RESULTS,
+    wiki_chars: int = WIKI_DOC_CONTENT_CHARS_MAX,
+    arxiv_k: int = ARXIV_TOP_K_RESULTS,
+    arxiv_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX,
+    duck_chars: int = DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
+):
 
     tools = []
-    
-    # Target ~16,500 chars total across all tools
-    wiki_k = 2;   wiki_chars = 3000    # 6,000 total
-    arxiv_k = 3;  arxiv_chars = 2500   # 7,500 total
-    duck_chars = 3000                   # 3,000 total
 
     try:
         wiki_api = WikipediaAPIWrapper(top_k_results=wiki_k, doc_content_chars_max=wiki_chars)

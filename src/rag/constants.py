@@ -4,6 +4,13 @@ BATCH_MAX_SIZE = 8
 BATCH_WINDOW_S = 0.05
 WARMUP_INTERVAL_S = 300
 
+# Web search configuration
+WIKI_TOP_K_RESULTS = 2
+WIKI_DOC_CONTENT_CHARS_MAX = 3000
+ARXIV_TOP_K_RESULTS = 3
+ARXIV_DOC_CONTENT_CHARS_MAX = 2500
+DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 3000
+
 RAG_PROMPT_TEMPLATE_BASE = """\
 <role>
 You are a helpful AI study assistant. You provide accurate, well-reasoned educational answers.{subject_line}

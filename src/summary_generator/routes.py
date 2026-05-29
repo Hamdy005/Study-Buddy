@@ -44,7 +44,8 @@ async def generate_summary(
                 raise HTTPException(400, "No text chunks found in this material")
             combined = "\n".join(c["content"] for c in chunks_list)
             if len(combined) > MAX_COMBINED_TEXT_LEN:
-                combined = combined[:MAX_COMBINED_TEXT_LEN]
+                half_len = MAX_COMBINED_TEXT_LEN // 2
+                combined = combined[:half_len] + combined[-half_len:]
             summary = await loop.run_in_executor(None, summarizer, combined)
 
         elapsed = time.time() - start

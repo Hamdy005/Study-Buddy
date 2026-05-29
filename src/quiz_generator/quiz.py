@@ -11,6 +11,10 @@ from .constants import (
     QUIZ_PROMPT_TEMPLATE,
     MAX_SAMPLE_CHUNKS,
     RETRIEVER_K,
+    WIKI_TOP_K_RESULTS,
+    WIKI_DOC_CONTENT_CHARS_MAX,
+    ARXIV_TOP_K_RESULTS,
+    ARXIV_DOC_CONTENT_CHARS_MAX,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,7 +125,12 @@ def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
     try:
         prompt = _quiz_prompt()
         llm = get_llm()
-        tools = web_search_tools()
+        tools = web_search_tools(
+            wiki_k=WIKI_TOP_K_RESULTS,
+            wiki_chars=WIKI_DOC_CONTENT_CHARS_MAX,
+            arxiv_k=ARXIV_TOP_K_RESULTS,
+            arxiv_chars=ARXIV_DOC_CONTENT_CHARS_MAX,
+        )
         agent = create_tool_calling_agent(llm, tools, prompt)
 
         executor = AgentExecutor(
