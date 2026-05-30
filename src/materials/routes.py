@@ -233,16 +233,27 @@ async def rename_material_endpoint(
     return {"status": "ok"}
 
 
+from src.materials.validator import validate_topic_input
+
 @router.post("/topic")
 async def create_topic(
     body: TopicRequest,
     user_id: str = Depends(get_current_user_id)
 ):
+    topic_str = body.topic.strip()
+    if not topic_str:
+        raise HTTPException(400, "Topic title cannot be empty")
+        
+    # NSFW and gibberish validation
+    validation_res = validate_topic_input(topic_str)
+    if validation_res != "ALLOWED":
+        raise HTTPException(400, validation_res)
+
     # Rely on the DB-level UNIQUE constraint on (user_id, title)
     try:
         mat = create_material(
             user_id=user_id,
-            title=body.topic.strip(),
+            title=topic_str,
             source_type="topic"
         )
     except APIError as e:

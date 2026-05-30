@@ -9,6 +9,7 @@ from langchain_core.tools import create_retriever_tool
 from src.rag.rag import get_llm, web_search_tools, SupabaseRetriever
 from .constants import (
     QUIZ_PROMPT_TEMPLATE,
+    WEB_QUIZ_PROMPT_TEMPLATE,
     MAX_SAMPLE_CHUNKS,
     RETRIEVER_K,
     WIKI_TOP_K_RESULTS,
@@ -123,7 +124,7 @@ def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
 def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
     logger.info(f"Web Quiz started (topic={topic_title}, diff={difficulty})")
     try:
-        prompt = _quiz_prompt()
+        prompt = WEB_QUIZ_PROMPT_TEMPLATE
         llm = get_llm()
         tools = web_search_tools(
             wiki_k=WIKI_TOP_K_RESULTS,
@@ -143,6 +144,7 @@ def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
 
         safe_context = topic_title
         response = executor.invoke({
+            "topic": topic_title,
             "context": safe_context,
             "difficulty": difficulty,
             "mcq_count": mcq_count,

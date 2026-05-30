@@ -4,6 +4,7 @@ from langchain_community.utilities import ArxivAPIWrapper, WikipediaAPIWrapper
 from src.rag.rag import get_llm
 from .constants import (
     SUMMARIZER_PROMPT_TEMPLATE,
+    WEB_SUMMARIZER_PROMPT_TEMPLATE,
     MAX_INPUT_CHARS,
     WIKI_TOP_K_RESULTS,
     WIKI_DOC_CONTENT_CHARS_MAX,
@@ -97,9 +98,19 @@ def web_summarizer(topic: str) -> str:
 
     if not all_content:
         logger.warning(f"No content found for topic: {topic}. Falling back to general knowledge.")
-        all_content.append(f"Topic: {topic}\n\nPlease provide a comprehensive educational summary of this topic based on your general knowledge.")
+        all_content.append(f"No web content found for: {topic}")
 
     combined = "\n\n".join(all_content)
     logger.info(f"Web search combined text length for topic '{topic}': {len(combined)}")
 
-    return summarizer(combined)
+    combined = _truncate_text(combined)
+    try:
+        llm = get_llm()
+        chain = WEB_SUMMARIZER_PROMPT_TEMPLATE | llm
+        response = chain.invoke({"topic": topic, "input": combined})
+        raw_content = response.content
+        logger.info(f"Web summarizer received response of length {len(raw_content)}")
+        return clean_summary(raw_content)
+    except Exception as e:
+        logger.error(f"Web summarizer failed: {str(e)}", exc_info=True)
+        raise
