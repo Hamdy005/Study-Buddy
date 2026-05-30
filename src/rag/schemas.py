@@ -17,13 +17,6 @@ class EmbeddingJob:
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-@dataclass
-class ValidationJob:
-    """Batch validation of a topic text."""
-    job_id: str
-    text: str
-    done: asyncio.Event = field(default_factory=asyncio.Event)
-
 
 
 # Tutor query and response schemas
