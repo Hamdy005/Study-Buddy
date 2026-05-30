@@ -483,7 +483,12 @@ export default function DashboardPage() {
       setIsUploadOpen(false)
       loadMaterials()
     } catch (err: unknown) {
-      toast.error('Failed to add topic')
+      const errorMsg = err instanceof Error ? err.message : ''
+      if (errorMsg.includes('gibberish') || errorMsg.includes('not safe for work')) {
+        toast.error(`failed to upload topic, as it contains ${errorMsg}`)
+      } else {
+        toast.error(errorMsg || 'Failed to add topic')
+      }
     } finally {
       setIsAddingTopic(false)
     }
@@ -734,10 +739,14 @@ export default function DashboardPage() {
                           placeholder="e.g. Neural Networks, Redis Caching, CI/CD Pipelines"
                           value={topicInput}
                           onChange={(e) => setTopicInput(e.target.value)}
+                          maxLength={80}
                         />
-                        <p className="text-xs text-muted-foreground">
-                          Study Buddy will use AI to generate summaries, quizzes and answer questions about this topic.
-                        </p>
+                        <div className="flex justify-between items-center text-xs text-muted-foreground mt-1">
+                          <span>Study Buddy will use AI to generate summaries, quizzes and answer questions about this topic.</span>
+                          <span className={cn(topicInput.length >= 80 ? "text-destructive font-medium animate-pulse" : "")}>
+                            {topicInput.length}/80
+                          </span>
+                        </div>
                       </div>
                       <Button
                         onClick={handleTopicSubmit}

@@ -233,7 +233,7 @@ async def rename_material_endpoint(
     return {"status": "ok"}
 
 
-from src.materials.validator import validate_topic_input
+from src.materials.validator import validate_topic_input_async
 
 @router.post("/topic")
 async def create_topic(
@@ -244,8 +244,8 @@ async def create_topic(
     if not topic_str:
         raise HTTPException(400, "Topic title cannot be empty")
         
-    # NSFW and gibberish validation
-    validation_res = validate_topic_input(topic_str)
+    # NSFW and gibberish validation using batch worker
+    validation_res = await validate_topic_input_async(topic_str)
     if validation_res != "ALLOWED":
         raise HTTPException(400, validation_res)
 

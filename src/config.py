@@ -32,6 +32,16 @@ class Settings:
         for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
         if origin.strip()
     ]
+    local_arabic_nsfw_words: list[str] = [
+        w.strip()
+        for w in os.getenv("LOCAL_ARABIC_NSFW_WORDS", "").split(",")
+        if w.strip()
+    ]
+    local_nsfw_words: list[str] = [
+        w.strip()
+        for w in os.getenv("LOCAL_NSFW_WORDS", "").split(",")
+        if w.strip()
+    ]
 
 
 @lru_cache()

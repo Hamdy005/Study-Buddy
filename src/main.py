@@ -51,6 +51,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Embedder failed to load: {e}")
 
+    try:
+        from src.materials.validator import warmup_validation_models
+        warmup_validation_models()
+        logger.info("Validation models loaded and warmed up successfully.")
+    except Exception as e:
+        logger.warning(f"Validation models failed to load: {e}")
+
     from src.rag.batch_workers import start_workers
     start_workers()
 

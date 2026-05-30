@@ -64,6 +64,9 @@ def is_request_in_flight() -> bool:
 
 embedding_queue: asyncio.Queue[EmbeddingJob] = asyncio.Queue()
 
+validation_queue: asyncio.Queue[Any] = asyncio.Queue()
+validation_job_store: dict[str, dict[str, Any]] = {}
+
 
 # ═══════════════════════ Workers ════════════════════════
 
@@ -150,6 +153,72 @@ async def embedding_worker():
             set_request_in_flight(False)
 
 
+async def validation_worker():
+    """
+    Drains up to {BATCH_MAX_SIZE} validation jobs every {BATCH_WINDOW_S * 1000:.0f}ms.
+    Runs batch validation using validate_topics_batch.
+    """
+    from src.materials.validator import validate_topics_batch
+
+    loop = asyncio.get_event_loop()
+
+    while True:
+        # Wait for at least one job
+        first_job = await validation_queue.get()
+        batch = [first_job]
+
+        # Collect up to 7 more within the time window
+        deadline = loop.time() + BATCH_WINDOW_S
+        while len(batch) < BATCH_MAX_SIZE:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                job = await asyncio.wait_for(validation_queue.get(), timeout=remaining)
+                batch.append(job)
+            except asyncio.TimeoutError:
+                break
+
+        try:
+            set_request_in_flight(True)
+
+            # Gather all texts from all jobs in the batch
+            all_texts = [job.text for job in batch]
+
+            # Single batch run for the entire batch
+            results = await loop.run_in_executor(
+                None, validate_topics_batch, all_texts
+            )
+
+            # Distribute results back to individual jobs
+            for i, job in enumerate(batch):
+                job_result = results[i]
+
+                if job.job_id not in validation_job_store:
+                    validation_job_store[job.job_id] = {"status": "pending", "result": None, "error": None}
+                
+                validation_job_store[job.job_id].update({
+                    "status": "done",
+                    "result": job_result
+                })
+                job.done.set()
+
+        except Exception as e:
+            logger.error(f"Validation batch failed: {e}", exc_info=True)
+            for job in batch:
+                if job.job_id not in validation_job_store:
+                    validation_job_store[job.job_id] = {"status": "error", "result": None, "error": str(e)}
+                else:
+                    validation_job_store[job.job_id].update({
+                        "status": "error",
+                        "error": str(e)
+                    })
+                if not job.done.is_set():
+                    job.done.set()
+        finally:
+            set_request_in_flight(False)
+
+
 # ═══════════════════════ Warmup Loop ════════════════════════
 
 
@@ -161,6 +230,7 @@ async def _warmup_loop():
     Skipped entirely if a real request is in flight.
     """
     from src.rag.rag import warmup_embedder
+    from src.materials.validator import warmup_validation_models
 
     loop = asyncio.get_event_loop()
 
@@ -171,6 +241,7 @@ async def _warmup_loop():
         t0 = time.monotonic()
         try:
             await loop.run_in_executor(None, warmup_embedder)
+            await loop.run_in_executor(None, warmup_validation_models)
         except Exception as e:
             logger.warning(f"Warmup cycle error (non-fatal): {e}")
             continue
@@ -188,6 +259,7 @@ def start_workers():
     Launch all async worker coroutines. Call once during app startup.
 
     - 1 embedding worker (batched SentenceTransformer inference)
+    - 1 validation worker (batched translation, gibberish, NSFW models validation)
     - 1 warmup loop (keeps OpenMP threads alive)
     """
     global _workers_started
@@ -197,6 +269,7 @@ def start_workers():
 
     # Use only 1 worker to save RAM on this environment
     asyncio.create_task(embedding_worker(), name="embedding_worker_0")
+    asyncio.create_task(validation_worker(), name="validation_worker_0")
     asyncio.create_task(_warmup_loop(), name="warmup_loop")
 
-    logger.info("Embedding batch workers started (1 worker + warmup loop)")
+    logger.info("Batch workers started (embedding worker + validation worker + warmup loop)")

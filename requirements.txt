@@ -26,3 +26,7 @@ python-multipart
 pydantic
 
 supabase
+transformers
+sacremoses
+sentencepiece
+
