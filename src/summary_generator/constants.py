@@ -104,7 +104,6 @@ Analyze the content and produce a summary with exactly these five sections in th
    - **Historical Background** (e.g., [[[[>>> Historical Background <<<]]]]) — Brief, concise history: when it originated, key milestones, and major contributors. Keep this summarized.
    - **Core Concepts and Fundamentals** (e.g., [[[[>>> Core Concepts and Fundamentals <<<]]]]) — The essential principles, mechanisms, theories, or ideas that form the foundation of this topic.
    - **Types / Categories / Variants** (e.g., [[[[>>> Types and Classifications <<<]]]]) — If the topic has distinct types, classifications, branches, or variants, list and briefly explain each one.
-   - **Architecture / Structure / Components** (e.g., [[[[>>> Architecture and Components <<<]]]]) — If applicable, describe the internal structure, architecture, system design, or key components and how they relate.
    - **How It Works / Process / Mechanism** (e.g., [[[[>>> How It Works <<<]]]]) — Step-by-step explanation of how it functions, operates, or proceeds, if applicable.
    - **Applications and Use Cases** (e.g., [[[[>>> Applications and Use Cases <<<]]]]) — Real-world applications, practical uses, and examples of where this topic is applied.
    - **Advantages and Strengths** (e.g., [[[[>>> Advantages and Strengths <<<]]]]) — Key benefits, strengths, and reasons why this topic/approach is valuable.

@@ -146,8 +146,25 @@ def get_llm():
         model=settings.model_name,
         api_key=settings.gemini_api_key,
         temperature=0.3,
-        max_output_tokens=2000,
+        max_output_tokens=2500,
         timeout=120,
+    )
+
+
+def get_quiz_llm():
+    """Dedicated LLM instance for quiz generation with a high output token budget.
+    Large quizzes (40 MCQs + 20 T/F) can produce 8000-12000 tokens of JSON,
+    so we cannot reuse the chat LLM which is capped at 2000 tokens.
+    """
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
+    logger.info(f"Initializing Quiz LLM with model: {settings.model_name}")
+    return ChatGoogleGenerativeAI(
+        model=settings.model_name,
+        api_key=settings.gemini_api_key,
+        temperature=0.3,
+        max_output_tokens=16000,
+        timeout=300,
     )
 
 

@@ -6,7 +6,7 @@ from typing import Optional
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.tools import create_retriever_tool
 
-from src.rag.rag import get_llm, web_search_tools, SupabaseRetriever
+from src.rag.rag import get_quiz_llm, web_search_tools, SupabaseRetriever
 from .constants import (
     QUIZ_PROMPT_TEMPLATE,
     WEB_QUIZ_PROMPT_TEMPLATE,
@@ -60,7 +60,7 @@ def _summary_quiz(difficulty, mcq_count, tf_count, context_text):
     logger.info(f"Summary Quiz started (diff={difficulty}, mcq={mcq_count}, tf={tf_count})")
     try:
         prompt = _quiz_prompt()
-        llm = get_llm()
+        llm = get_quiz_llm()
         safe_context = context_text
         
         chain = prompt | llm
@@ -87,7 +87,7 @@ def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
     logger.info(f"Contextual Quiz started (material_id={material_id}, diff={difficulty})")
     try:
         prompt = _quiz_prompt()
-        llm = get_llm()
+        llm = get_quiz_llm()
 
         retriever = SupabaseRetriever(material_id=material_id, k=RETRIEVER_K)
         retriever_tool = create_retriever_tool(
@@ -103,6 +103,8 @@ def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
             verbose=False,
             return_intermediate_steps=False,
             handle_parsing_errors=True,
+            max_iterations=80,
+            max_execution_time=300,
         )
 
         safe_context = context or ""
@@ -125,7 +127,7 @@ def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
     logger.info(f"Web Quiz started (topic={topic_title}, diff={difficulty})")
     try:
         prompt = WEB_QUIZ_PROMPT_TEMPLATE
-        llm = get_llm()
+        llm = get_quiz_llm()
         tools = web_search_tools(
             wiki_k=WIKI_TOP_K_RESULTS,
             wiki_chars=WIKI_DOC_CONTENT_CHARS_MAX,
@@ -140,6 +142,8 @@ def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
             verbose=False,
             return_intermediate_steps=False,
             handle_parsing_errors=True,
+            max_iterations=80,
+            max_execution_time=300,
         )
 
         safe_context = topic_title

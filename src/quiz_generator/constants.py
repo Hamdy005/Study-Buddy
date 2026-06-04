@@ -1,7 +1,7 @@
 from langchain.prompts import PromptTemplate
 
 MIN_MCQ_COUNT = 1
-MAX_MCQ_COUNT = 20
+MAX_MCQ_COUNT = 40
 MIN_TF_COUNT = 1
 MAX_TF_COUNT = 20
 

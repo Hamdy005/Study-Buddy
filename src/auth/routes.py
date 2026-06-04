@@ -94,7 +94,11 @@ async def get_profile(
                 "email": getattr(user_obj, "email", "") or "",
                 "avatar_url": "",
                 "daily_requests": real_usage.get("used", 0),
-                "last_request_date": __import__('datetime').date.today().isoformat(),
+                "last_request_date": (
+                    __import__('datetime').datetime.now(
+                        __import__('datetime').timezone(__import__('datetime').timedelta(hours=3))
+                    ).date().isoformat()
+                ),
                 "_is_fallback": True,
             })
 

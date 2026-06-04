@@ -3,9 +3,14 @@ import time
 from httpx import RemoteProtocolError
 from typing import Optional
 import logging
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from src.database import get_supabase
+
+def _get_today_date_str() -> str:
+    # Shift UTC time by 3 hours to match Egypt timezone (UTC+3), so daily limits reset at 12 AM Egypt time.
+    egypt_tz = timezone(timedelta(hours=3))
+    return datetime.now(egypt_tz).date().isoformat()
 
 _in_memory: dict = {
     "materials": {},
@@ -384,7 +389,7 @@ def get_quizzes(material_id: Optional[str] = None, user_id: Optional[str] = None
 # ── Users (maps to Supabase `profiles` table) ─────────
 
 def _map_profile(profile: dict) -> dict:
-    today = date.today().isoformat()
+    today = _get_today_date_str()
     used = profile.get("daily_requests", 0) if profile.get("last_request_date") == today else 0
     return {
         "id": profile["id"],
@@ -646,32 +651,15 @@ def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, l
     Returns True if request is allowed, False if limit exceeded.
     Excludes Admin Emails from Limits.
 
-    Uses a single atomic SQL UPDATE via Supabase RPC to eliminate the
-    check-then-increment race condition (two concurrent reads both see
-    count=9, both pass, both increment → 11th request gets through).
+    Bypasses the database RPC (which runs in UTC and resets at 3 AM Egypt time)
+    to perform the date check in python using Egypt local timezone (UTC+3), 
+    ensuring limits reset exactly at 12 AM Egypt time.
     """
     # Guard: never apply limit to admin emails
     if email and email in ADMIN_EMAILS:
         return True
 
-    client = _db()
-    if client is not None:
-        try:
-            result = client.rpc(
-                "increment_daily_limit",
-                {"p_user_id": user_id, "p_limit": limit},
-            ).execute()
-            if not result.data:
-                return False
-            return True
-        except Exception as e:
-            logger.warning(f"Atomic rate-limit RPC failed, falling back to two-query path: {e}")
-            # Fall through to the two-query fallback below
-
-    # ── Offline / dev fallback (also used when RPC call above raises) ──────────
-    # This path has a theoretical race condition but is acceptable for single-
-    # worker dev environments where the RPC is not available.
-    today = date.today().isoformat()
+    today = _get_today_date_str()
     try:
         result = _robust_execute(
             _table_supabase("profiles")
@@ -706,7 +694,7 @@ def get_usage(user_id: str) -> dict:
     """
     Returns current usage for a user.
     """
-    today = date.today().isoformat()
+    today = _get_today_date_str()
     try:
         result = _robust_execute(
             _table_supabase("profiles")

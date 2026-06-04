@@ -3,8 +3,8 @@ from typing import Optional
 
 class QuizRequest(BaseModel):
     difficulty: str = "Medium"
-    mcq_count: int = 4
-    tf_count: int = 3
+    mcq_count: int = 10
+    tf_count: int = 5
     source_type: str = "web"
     material_id: Optional[str] = None
     topic: Optional[str] = None

@@ -1410,10 +1410,10 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
   setIsGenerating: (v: boolean) => void
 }) {
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
-  const [mcqCount, setMcqCount] = useState(3)
-  const [tfCount, setTfCount] = useState(2)
-  const [mcqCountInput, setMcqCountInput] = useState('3')
-  const [tfCountInput, setTfCountInput] = useState('2')
+  const [mcqCount, setMcqCount] = useState(10)
+  const [tfCount, setTfCount] = useState(5)
+  const [mcqCountInput, setMcqCountInput] = useState('10')
+  const [tfCountInput, setTfCountInput] = useState('5')
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
   const [quizId, setQuizId] = useState<string | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
@@ -1909,7 +1909,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
               <div className="flex items-center justify-between p-4 rounded-2xl border border-border/50 bg-muted/30">
                 <div className="flex flex-col">
                   <span className="text-base font-semibold">Multiple Choice</span>
-                  <span className="text-sm text-muted-foreground">Range: 1-15</span>
+                  <span className="text-sm text-muted-foreground">Range: 1-40</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <Button
@@ -1924,7 +1924,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                   <Input
                     type="number"
                     min={1}
-                    max={15}
+                    max={40}
                     value={mcqCountInput}
                     onChange={(e) => {
                       const next = e.target.value
@@ -1932,12 +1932,12 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                       if (!next.trim()) return
                       const parsed = parseInt(next, 10)
                       if (!Number.isNaN(parsed)) {
-                        setMcqCount(clampCount(parsed, 1, 15))
+                        setMcqCount(clampCount(parsed, 1, 40))
                       }
                     }}
                     onBlur={() => {
                       const parsed = parseInt(mcqCountInput, 10)
-                      const clamped = clampCount(Number.isNaN(parsed) ? 1 : parsed, 1, 15)
+                      const clamped = clampCount(Number.isNaN(parsed) ? 1 : parsed, 1, 40)
                       setMcqCount(clamped)
                       setMcqCountInput(String(clamped))
                     }}
@@ -1947,8 +1947,8 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                     variant="outline"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    onClick={() => setMcqCount(Math.min(15, mcqCount + 1))}
-                    disabled={mcqCount >= 15}
+                    onClick={() => setMcqCount(Math.min(40, mcqCount + 1))}
+                    disabled={mcqCount >= 40}
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
@@ -1959,7 +1959,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
               <div className="flex items-center justify-between p-4 rounded-2xl border border-border/50 bg-muted/30">
                 <div className="flex flex-col">
                   <span className="text-base font-semibold">True / False</span>
-                  <span className="text-sm text-muted-foreground">Range: 1-10</span>
+                  <span className="text-sm text-muted-foreground">Range: 1-20</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <Button
@@ -1974,7 +1974,7 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                   <Input
                     type="number"
                     min={1}
-                    max={10}
+                    max={20}
                     value={tfCountInput}
                     onChange={(e) => {
                       const next = e.target.value
@@ -1982,12 +1982,12 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                       if (!next.trim()) return
                       const parsed = parseInt(next, 10)
                       if (!Number.isNaN(parsed)) {
-                        setTfCount(clampCount(parsed, 1, 10))
+                        setTfCount(clampCount(parsed, 1, 20))
                       }
                     }}
                     onBlur={() => {
                       const parsed = parseInt(tfCountInput, 10)
-                      const clamped = clampCount(Number.isNaN(parsed) ? 1 : parsed, 1, 10)
+                      const clamped = clampCount(Number.isNaN(parsed) ? 1 : parsed, 1, 20)
                       setTfCount(clamped)
                       setTfCountInput(String(clamped))
                     }}
@@ -1997,8 +1997,8 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                     variant="outline"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    onClick={() => setTfCount(Math.min(10, tfCount + 1))}
-                    disabled={tfCount >= 10}
+                    onClick={() => setTfCount(Math.min(20, tfCount + 1))}
+                    disabled={tfCount >= 20}
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
