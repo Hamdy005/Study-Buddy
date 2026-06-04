@@ -68,12 +68,23 @@ function buildHeaders(token: string | null): HeadersInit {
   }
 }
 
+// Force a full sign-out when the refresh token is expired or invalid.
+function forceSignOut() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem('auth_token')
+  localStorage.removeItem('auth_user')
+  localStorage.removeItem('usage_cache')
+  localStorage.removeItem('cached_materials')
+  supabase.auth.signOut().catch(() => {})
+}
+
 /** Attempt to refresh the Supabase session and return the new access token, or null. */
 async function refreshToken(): Promise<string | null> {
   try {
-    const { data } = await supabase.auth.getSession()
-    const newToken = data.session?.access_token ?? null
-    if (newToken && typeof window !== 'undefined') {
+    const { data, error } = await supabase.auth.refreshSession()
+    if (error || !data.session) return null
+    const newToken = data.session.access_token
+    if (typeof window !== 'undefined') {
       localStorage.setItem('auth_token', newToken)
     }
     return newToken
@@ -97,6 +108,7 @@ async function fetchAPI<T>(
   // If the server returns 401, the stored JWT is likely expired (e.g. the user
   // left the tab open overnight).  Ask Supabase to refresh the session and retry
   // the request once with the new token before surfacing the error.
+  // If the refresh itself fails (refresh token also expired), force a full sign-out.
   if (response.status === 401) {
     const freshToken = await refreshToken()
     if (freshToken) {
@@ -104,12 +116,20 @@ async function fetchAPI<T>(
         ...options,
         headers: { ...buildHeaders(freshToken), ...options.headers },
       })
+      if (retryResponse.status === 401) {
+        // Refresh token was also invalid — session is fully dead, force logout.
+        forceSignOut()
+        throw new Error('Session expired. Please sign in again.')
+      }
       if (!retryResponse.ok) {
         const error = await retryResponse.json().catch(() => ({ message: 'An error occurred' }))
         throw new Error(error.message || error.detail || `HTTP error! status: ${retryResponse.status}`)
       }
       return retryResponse.json()
     }
+    // refreshToken() returned null — refresh token missing or Supabase unreachable.
+    forceSignOut()
+    throw new Error('Session expired. Please sign in again.')
   }
 
   if (!response.ok) {
@@ -176,6 +196,13 @@ export const materialsAPI = {
           headers: makeHeaders(token),
           body: formData,
         })
+        if (response.status === 401) {
+          forceSignOut()
+          throw new Error('Session expired. Please sign in again.')
+        }
+      } else {
+        forceSignOut()
+        throw new Error('Session expired. Please sign in again.')
       }
     }
 

@@ -646,16 +646,11 @@ def get_or_create_memory(memory_id: Optional[str] = None, seed_messages: list[di
     return mem, mid
 
 
-def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
+def check_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
     """
-    Returns True if request is allowed, False if limit exceeded.
-    Excludes Admin Emails from Limits.
-
-    Bypasses the database RPC (which runs in UTC and resets at 3 AM Egypt time)
-    to perform the date check in python using Egypt local timezone (UTC+3), 
-    ensuring limits reset exactly at 12 AM Egypt time.
+    Checks if the user is under the daily limit. Returns True if allowed, False if exceeded.
+    Does NOT increment the count.
     """
-    # Guard: never apply limit to admin emails
     if email and email in ADMIN_EMAILS:
         return True
 
@@ -678,16 +673,51 @@ def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, l
             count = 0
         if count >= limit:
             return False
+        return True
+    except Exception as e:
+        logger.error(f"Rate limit check failed: {e}")
+        return True
+
+
+def increment_daily_usage(user_id: str) -> None:
+    """
+    Increments the daily request count for the user.
+    """
+    today = _get_today_date_str()
+    try:
+        result = _robust_execute(
+            _table_supabase("profiles")
+            .select("daily_requests, last_request_date")
+            .eq("id", user_id)
+        )
+        if not result.data:
+            return
+        profile = result.data[0] if result.data else None
+        if not profile:
+            return
+
+        last_date = profile.get("last_request_date")
+        count = profile.get("daily_requests", 0) or 0
+        if last_date != today:
+            count = 0
 
         _robust_execute(
             _table_supabase("profiles")
             .update({"daily_requests": count + 1, "last_request_date": today})
             .eq("id", user_id)
         )
-        return True
     except Exception as e:
-        logger.error(f"Rate limit check failed: {e}")
-        return True
+        logger.error(f"Failed to increment daily usage: {e}")
+
+
+def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
+    """
+    Check limit and increment if allowed. Deprecated/kept for compatibility.
+    """
+    allowed = check_daily_limit(user_id, email, limit)
+    if allowed and not (email and email in ADMIN_EMAILS):
+        increment_daily_usage(user_id)
+    return allowed
 
 
 def get_usage(user_id: str) -> dict:

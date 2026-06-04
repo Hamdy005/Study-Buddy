@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 
 from src.summary_generator.summary import summarizer, web_summarizer
-from src.store import get_material, get_chunks, save_summary, get_summary as get_stored_summary, check_and_increment_daily_limit
+from src.store import get_material, get_chunks, save_summary, get_summary as get_stored_summary, check_daily_limit, increment_daily_usage
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
 from .schemas import SummarizeRequest, SummarizeResponse
@@ -22,7 +22,7 @@ async def generate_summary(
 ):
     # Rate limit check
     user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-    if not check_and_increment_daily_limit(user_id, email=user_email, limit=20):
+    if not check_daily_limit(user_id, email=user_email, limit=20):
         raise HTTPException(429, "Daily limit of 20 requests reached. Come back tomorrow!")
 
     mat = get_material(body.material_id)
@@ -57,6 +57,10 @@ async def generate_summary(
             time_taken=elapsed,
             model_name=settings.model_name,
         )
+
+        # Only increment limit if the summary was generated successfully and saved without error
+        if not (user_email and user_email in settings.admin_emails if hasattr(settings, "admin_emails") else False):
+            increment_daily_usage(user_id)
 
         return SummarizeResponse(summary=summary, time_taken=elapsed)
     except Exception as e:

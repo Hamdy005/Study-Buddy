@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from src.quiz_generator.quiz import smart_quiz_generator
-from src.store import get_material, get_chunks, get_summary, save_quiz, get_quizzes, save_quiz_result, get_quiz_results, check_and_increment_daily_limit
+from src.store import get_material, get_chunks, get_summary, save_quiz, get_quizzes, save_quiz_result, get_quiz_results, check_daily_limit, increment_daily_usage, ADMIN_EMAILS
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
 from .schemas import QuizRequest, QuizResponse, SaveQuizResultRequest
@@ -35,7 +35,7 @@ async def generate_quiz(
 ):
     # Rate limit check
     user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-    if not check_and_increment_daily_limit(user_id, email=user_email, limit=20):
+    if not check_daily_limit(user_id, email=user_email, limit=20):
         raise HTTPException(429, "Daily limit of 20 requests reached. Come back tomorrow!")
 
     body.difficulty = body.difficulty.capitalize()
@@ -108,6 +108,10 @@ async def generate_quiz(
             quiz_data=quiz,
             model_name=settings.model_name,
         )
+
+        # Only increment limit if the quiz was generated successfully and saved without error
+        if not (user_email and user_email in ADMIN_EMAILS):
+            increment_daily_usage(user_id)
 
         return QuizResponse(quiz=quiz, quiz_id=saved["id"])
     except ValueError as e:

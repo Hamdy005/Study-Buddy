@@ -163,7 +163,7 @@ def get_quiz_llm():
         model=settings.model_name,
         api_key=settings.gemini_api_key,
         temperature=0.3,
-        max_output_tokens=16000,
+        max_output_tokens=12000,
         timeout=300,
     )
 
