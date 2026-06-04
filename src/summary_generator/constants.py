@@ -4,12 +4,12 @@ MAX_INPUT_CHARS = 150000
 MAX_COMBINED_TEXT_LEN = 160000
 
 # Web search configuration — targets ~150k total (≈ MAX_INPUT_CHARS)
-WIKI_TOP_K_RESULTS = 3
-WIKI_DOC_CONTENT_CHARS_MAX = 40000   # 3 × 40k = 120k  (80% of budget — foundational content)
+WIKI_TOP_K_RESULTS = 2
+WIKI_DOC_CONTENT_CHARS_MAX = 60000  
 
 # arXiv is supplementary — adds depth for technical/research topics
 ARXIV_TOP_K_RESULTS = 1
-ARXIV_DOC_CONTENT_CHARS_MAX = 30000  # 1 × 30k =  30k  → total ≈ 150k
+ARXIV_DOC_CONTENT_CHARS_MAX = 30000 
 
 SUMMARIZER_PROMPT_TEMPLATE = PromptTemplate(
     input_variables=["input"],

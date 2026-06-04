@@ -9,11 +9,11 @@ MAX_SAMPLE_CHUNKS = 10
 RETRIEVER_K = 5
 
 # Web search configuration — Wikipedia is the primary educational source
-WIKI_TOP_K_RESULTS = 3
-WIKI_DOC_CONTENT_CHARS_MAX = 40000   # 3 × 40k = 120k  (broad topic coverage)
+WIKI_TOP_K_RESULTS = 2
+WIKI_DOC_CONTENT_CHARS_MAX = 60000  
 # arXiv adds technical depth as supplementary source
 ARXIV_TOP_K_RESULTS = 1
-ARXIV_DOC_CONTENT_CHARS_MAX = 30000  # 1 × 30k = 30k  → total ≈ 150k
+ARXIV_DOC_CONTENT_CHARS_MAX = 30000 
 
 QUIZ_PROMPT_TEMPLATE = PromptTemplate(
     input_variables=[

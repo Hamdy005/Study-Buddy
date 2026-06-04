@@ -1,6 +1,7 @@
 import re
 import logging
-from langchain_community.utilities import ArxivAPIWrapper, WikipediaAPIWrapper
+import concurrent.futures
+from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
 from src.rag.rag import get_llm
 from .constants import (
     SUMMARIZER_PROMPT_TEMPLATE,
@@ -8,8 +9,6 @@ from .constants import (
     MAX_INPUT_CHARS,
     WIKI_TOP_K_RESULTS,
     WIKI_DOC_CONTENT_CHARS_MAX,
-    ARXIV_TOP_K_RESULTS,
-    ARXIV_DOC_CONTENT_CHARS_MAX,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,27 +73,37 @@ def web_summarizer(topic: str) -> str:
 
     all_content = []
 
-    try:
-        wiki_api = WikipediaAPIWrapper(
-            top_k_results=WIKI_TOP_K_RESULTS,
-            doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
-        )
-        wiki_content = wiki_api.run(topic)
-        if wiki_content and wiki_content.strip():
-            all_content.append(f"--- Wikipedia ---\n{wiki_content}")
-    except Exception as e:
-        logger.warning(f"Wikipedia search for '{topic}' failed: {e}")
+    def fetch_wikipedia():
+        try:
+            wiki_api = WikipediaAPIWrapper(
+                top_k_results=WIKI_TOP_K_RESULTS,
+                doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
+            )
+            return wiki_api.run(topic)
+        except Exception as e:
+            logger.warning(f"Wikipedia search for '{topic}' failed: {e}")
+            return ""
 
-    try:
-        arxiv_api = ArxivAPIWrapper(
-            top_k_results=ARXIV_TOP_K_RESULTS,
-            doc_content_chars_max=ARXIV_DOC_CONTENT_CHARS_MAX,
-        )
-        arxiv_content = arxiv_api.run(topic)
-        if arxiv_content and arxiv_content.strip():
-            all_content.append(f"--- Arxiv ---\n{arxiv_content}")
-    except Exception as e:
-        logger.warning(f"Arxiv search for '{topic}' failed: {e}")
+    def fetch_duckduckgo():
+        try:
+            duck_api = DuckDuckGoSearchAPIWrapper()
+            return duck_api.run(topic)
+        except Exception as e:
+            logger.warning(f"DuckDuckGo search for '{topic}' failed: {e}")
+            return ""
+
+    # Execute searches in parallel to minimize latency
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        wiki_future = executor.submit(fetch_wikipedia)
+        duck_future = executor.submit(fetch_duckduckgo)
+
+        wiki_content = wiki_future.result()
+        duck_content = duck_future.result()
+
+    if wiki_content and wiki_content.strip():
+        all_content.append(f"--- Wikipedia ---\n{wiki_content}")
+    if duck_content and duck_content.strip():
+        all_content.append(f"--- Web Search ---\n{duck_content}")
 
     if not all_content:
         logger.warning(f"No content found for topic: {topic}. Falling back to general knowledge.")
