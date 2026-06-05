@@ -30,6 +30,7 @@ import {
   MoreHorizontal,
   Mic,
   MicOff,
+  X,
 } from 'lucide-react'
 import { Logo } from '@/components/logo'
 import { Button } from '@/components/ui/button'
@@ -750,7 +751,7 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-xl font-semibold text-foreground">Generating your summary</span>
-              <span className="text-muted-foreground">This might take a while...</span>
+              <span className="text-muted-foreground">This will take just a few seconds...</span>
             </div>
           </CardContent>
         </Card>
@@ -936,6 +937,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const [isTranscribing, setIsTranscribing] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const isDiscardedRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastUserMessageRef = useRef<HTMLDivElement | null>(null)
   const shouldScrollToUserRef = useRef(false)
@@ -1477,6 +1479,22 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
                   {/* Right: Mic + Send */}
                   <div className="flex items-center gap-1.5">
+                    {isRecording && (
+                      <button
+                        type="button"
+                        id="asr-discard-button"
+                        onClick={() => {
+                          isDiscardedRef.current = true
+                          mediaRecorderRef.current?.stop()
+                          setIsRecording(false)
+                        }}
+                        className="h-8 w-8 rounded-lg flex items-center justify-center transition-all hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                        title="Discard recording"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+
                     {/* Mic button */}
                     <button
                       type="button"
@@ -1489,6 +1507,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                           setIsRecording(false)
                         } else {
                           // Start recording
+                          isDiscardedRef.current = false
                           try {
                             const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
                             audioChunksRef.current = []
@@ -1505,6 +1524,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                             recorder.onstop = async () => {
                               // Stop all mic tracks
                               stream.getTracks().forEach(t => t.stop())
+
+                              if (isDiscardedRef.current) {
+                                audioChunksRef.current = []
+                                return
+                              }
+
                               const blob = new Blob(audioChunksRef.current, { type: mimeType })
                               audioChunksRef.current = []
                               if (blob.size === 0) {

@@ -68,12 +68,18 @@ def summarizer(text: str) -> str:
         raise
 
 
-def web_summarizer(topic: str) -> str:
-    logger.info(f"Web summarizer started for topic: {topic}")
+def fetch_web_content(topic: str) -> str:
+    """
+    Fetch raw Wikipedia + DuckDuckGo content for *topic* and return the combined
+    text string.  This is a pure data-fetching helper — no LLM is called.
 
-    all_content = []
+    The returned text can be:
+    - Chunked and stored in the DB for future reuse.
+    - Passed directly to an LLM prompt as context.
+    """
+    logger.info(f"fetch_web_content started for topic: {topic}")
 
-    def fetch_wikipedia():
+    def _fetch_wikipedia():
         try:
             wiki_api = WikipediaAPIWrapper(
                 top_k_results=WIKI_TOP_K_RESULTS,
@@ -84,7 +90,7 @@ def web_summarizer(topic: str) -> str:
             logger.warning(f"Wikipedia search for '{topic}' failed: {e}")
             return ""
 
-    def fetch_duckduckgo():
+    def _fetch_duckduckgo():
         try:
             duck_api = DuckDuckGoSearchAPIWrapper()
             return duck_api.run(topic)
@@ -92,34 +98,47 @@ def web_summarizer(topic: str) -> str:
             logger.warning(f"DuckDuckGo search for '{topic}' failed: {e}")
             return ""
 
-    # Execute searches in parallel to minimize latency
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        wiki_future = executor.submit(fetch_wikipedia)
-        duck_future = executor.submit(fetch_duckduckgo)
-
+        wiki_future = executor.submit(_fetch_wikipedia)
+        duck_future = executor.submit(_fetch_duckduckgo)
         wiki_content = wiki_future.result()
         duck_content = duck_future.result()
 
+    all_content = []
     if wiki_content and wiki_content.strip():
         all_content.append(f"--- Wikipedia ---\n{wiki_content}")
     if duck_content and duck_content.strip():
         all_content.append(f"--- Web Search ---\n{duck_content}")
 
     if not all_content:
-        logger.warning(f"No content found for topic: {topic}. Falling back to general knowledge.")
-        all_content.append(f"No web content found for: {topic}")
+        logger.warning(f"No content found for topic: {topic}. Returning placeholder.")
+        return f"No web content found for: {topic}"
 
     combined = "\n\n".join(all_content)
-    logger.info(f"Web search combined text length for topic '{topic}': {len(combined)}")
+    logger.info(f"fetch_web_content combined length for '{topic}': {len(combined)}")
+    return combined
 
+
+def web_summarizer(topic: str, raw_content: str | None = None) -> str:
+    """
+    Generate an LLM summary for *topic*.
+
+    If *raw_content* is provided (pre-fetched web text) it is used directly,
+    skipping the Wiki/DDG network calls.  Otherwise fetch_web_content() is
+    called internally so this function stays usable standalone.
+    """
+    logger.info(f"Web summarizer started for topic: {topic}")
+
+    combined = raw_content if raw_content is not None else fetch_web_content(topic)
     combined = _truncate_text(combined)
+
     try:
         llm = get_llm()
         chain = WEB_SUMMARIZER_PROMPT_TEMPLATE | llm
         response = chain.invoke({"topic": topic, "input": combined})
-        raw_content = response.content
-        logger.info(f"Web summarizer received response of length {len(raw_content)}")
-        return clean_summary(raw_content)
+        raw_resp = response.content
+        logger.info(f"Web summarizer received response of length {len(raw_resp)}")
+        return clean_summary(raw_resp)
     except Exception as e:
         logger.error(f"Web summarizer failed: {str(e)}", exc_info=True)
         raise

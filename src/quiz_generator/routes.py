@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from src.quiz_generator.quiz import smart_quiz_generator
-from src.store import get_material, get_chunks, get_summary, save_quiz, get_quizzes, save_quiz_result, get_quiz_results, check_daily_limit, increment_daily_usage, ADMIN_EMAILS
+from src.store import get_material, get_chunks, save_chunks, get_summary, save_quiz, get_quizzes, save_quiz_result, get_quiz_results, check_daily_limit, increment_daily_usage, ADMIN_EMAILS
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
 from .schemas import QuizRequest, QuizResponse, SaveQuizResultRequest
@@ -56,20 +56,71 @@ async def generate_quiz(
                     if mat.get("user_id") != user_id:
                         raise HTTPException(403, "Access denied")
                     topic_title = mat.get("title")
-            
+
             if not topic_title:
                 raise HTTPException(400, "Topic title or valid material_id is required for web-based quiz")
 
             loop = asyncio.get_event_loop()
-            quiz = await loop.run_in_executor(
-                None,
-                lambda: smart_quiz_generator(
-                    difficulty=body.difficulty,
-                    mcq_count=body.mcq_count,
-                    tf_count=body.tf_count,
-                    topic_title=topic_title,
+
+            # ── Lazy cache check ──────────────────────────────────────────────
+            # If this topic material already has cached chunks (from a prior
+            # summary/quiz), use the contextual path (vector retriever).
+            # Otherwise fetch web content now, cache it, then generate.
+            existing_chunks = []
+            if body.material_id:
+                existing_chunks = await loop.run_in_executor(None, get_chunks, body.material_id)
+
+            if existing_chunks:
+                # Fast path — use cached embeddings via SupabaseRetriever
+                logger.info(
+                    f"Topic '{topic_title}' has {len(existing_chunks)} cached chunks — "
+                    "using contextual quiz path."
                 )
-            )
+                chunks_texts = [c["content"] for c in existing_chunks]
+                quiz = await loop.run_in_executor(
+                    None,
+                    lambda: smart_quiz_generator(
+                        difficulty=body.difficulty,
+                        mcq_count=body.mcq_count,
+                        tf_count=body.tf_count,
+                        material_id=body.material_id,  # triggers SupabaseRetriever
+                        chunks=chunks_texts,
+                    )
+                )
+
+            else:
+                # First-time path — fetch web content, cache it, then quiz
+                logger.info(
+                    f"Topic '{topic_title}' has no cached chunks — fetching web content for quiz."
+                )
+                from src.summary_generator.summary import fetch_web_content
+                from src.materials.text_utils import chunk_text
+                from src.rag.rag import store_embeddings_async
+
+                raw_content = await loop.run_in_executor(None, fetch_web_content, topic_title)
+
+                chunks_texts = await loop.run_in_executor(
+                    None, lambda: chunk_text(raw_content, chunk_size=600, chunk_overlap=100)
+                )
+                if chunks_texts and body.material_id:
+                    chunk_ids = await loop.run_in_executor(
+                        None, save_chunks, body.material_id, chunks_texts
+                    )
+                    await store_embeddings_async(body.material_id, chunk_ids, chunks_texts)
+                    logger.info(
+                        f"Cached {len(chunks_texts)} chunks for topic '{topic_title}'."
+                    )
+
+                quiz = await loop.run_in_executor(
+                    None,
+                    lambda: smart_quiz_generator(
+                        difficulty=body.difficulty,
+                        mcq_count=body.mcq_count,
+                        tf_count=body.tf_count,
+                        topic_title=topic_title,
+                        chunks=chunks_texts if chunks_texts else None,
+                    )
+                )
 
         elif body.source_type in ("pdf", "url"):
             mat = get_material(body.material_id) if body.material_id else None
