@@ -7,8 +7,10 @@ WARMUP_INTERVAL_S = 300
 # Web search configuration — Wiki + DDG for topics, DDG only for PDF/URL materials.
 WIKI_TOP_K_RESULTS = 1
 WIKI_DOC_CONTENT_CHARS_MAX = 1200    # max chars from Wikipedia result
-DUCKDUCKGO_NUM_RESULTS = 3           # number of DDG snippet results returned per search
-DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 1200  # max chars kept from the combined DDG result block
+
+# DuckDuckGO Search
+DUCKDUCKGO_NUM_RESULTS = 5           # number of DDG snippet results returned per search
+DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 3000  # max chars kept from the combined DDG result block
 
 RAG_PROMPT_TEMPLATE_BASE = """\
 <role>

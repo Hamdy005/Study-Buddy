@@ -337,7 +337,10 @@ def rag_answer(
             context_parts.append(f"Wikipedia Results:\n{wiki_snippets}")
 
     # --- DuckDuckGo search: ALL material types (topics, PDFs, URLs) ---
-    ddg_snippets = direct_ddg_search(query)
+    # Enrich the search query with the subject title so follow-up / short
+    subject_title = mat.get("title") if mat and mat.get("title") else ""
+    ddg_query = f"{query} {subject_title}".strip() if subject_title else query
+    ddg_snippets = direct_ddg_search(ddg_query)
     if ddg_snippets:
         context_parts.append(f"Web Search Results (DuckDuckGo):\n{ddg_snippets}")
 
@@ -351,6 +354,18 @@ def rag_answer(
         has_knowledge_retriever=has_knowledge,
         subject=subject_title,
     )
+
+    # Safety/refusal responses must NOT be saved to memory, otherwise the
+    _REFUSAL_PREFIXES = (
+        "I can't respond on a gibberish",
+        "I can't respond on a NSFW",
+        "I can't respond on a political",
+        "I can't respond on a religious",
+    )
+
+    def _is_refusal(text: str) -> bool:
+        t = text.strip()
+        return any(t.startswith(p) for p in _REFUSAL_PREFIXES)
 
     try:
         # All queries now use the simple LLM call (no agent loop).
@@ -368,7 +383,9 @@ def rag_answer(
         })
 
         answer = response.content
-        memory.save_context({"input": query}, {"output": answer})
+        # Only persist non-refusal answers to memory
+        if not _is_refusal(answer):
+            memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
         logger.warning(f"Groq API call failed or rate-limited: {e}. Falling back to google/gemma-4-31b-it immediately.")
@@ -385,7 +402,9 @@ def rag_answer(
                 "agent_scratchpad": "",
             })
             answer = response.content
-            memory.save_context({"input": query}, {"output": answer})
+            # Only persist non-refusal answers to memory
+            if not _is_refusal(answer):
+                memory.save_context({"input": query}, {"output": answer})
             return answer, memory
         except Exception as fallback_err:
             logger.error(f"Fallback LLM call also failed: {fallback_err}")

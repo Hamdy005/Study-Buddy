@@ -90,19 +90,20 @@ function renderMarkdown(text: string) {
     const headerMatch = trimmed.match(/^(#{1,4})\s*(.+)/)
     if (headerMatch) {
       const level = headerMatch[1].length
-      const content = headerMatch[2].trim()
+      const rawContent = headerMatch[2].trim()
+      // Strip any surrounding ** or * the model adds around the header text
+      const cleanedContent = rawContent.replace(/^\*{1,2}(.+?)\*{1,2}$/, '$1').trim()
+      const htmlContent = DOMPurify.sanitize(formatInlineMd(cleanedContent))
       if (level === 1) {
-        elements.push(<h1 key={key++} className="font-bold text-xl mt-5 mb-2 text-foreground">{content}</h1>)
+        elements.push(<h1 key={key++} className="font-bold text-xl mt-5 mb-2 text-foreground" dangerouslySetInnerHTML={{ __html: htmlContent }} />)
       } else if (level === 2) {
-        elements.push(<h2 key={key++} className="font-bold text-lg mt-5 mb-2 text-foreground">{content}</h2>)
+        elements.push(<h2 key={key++} className="font-bold text-lg mt-5 mb-2 text-foreground" dangerouslySetInnerHTML={{ __html: htmlContent }} />)
       } else if (level === 3) {
         elements.push(
-          <h3 key={key++} className="font-bold text-lg mt-6 mb-2 text-primary border-b border-primary/10 pb-1.5 flex items-center gap-2">
-            {content}
-          </h3>
+          <h3 key={key++} className="font-bold text-lg mt-6 mb-2 text-primary border-b border-primary/10 pb-1.5" dangerouslySetInnerHTML={{ __html: htmlContent }} />
         )
       } else {
-        elements.push(<h4 key={key++} className="font-semibold text-base mt-4 mb-2 text-foreground/90">{content}</h4>)
+        elements.push(<h4 key={key++} className="font-semibold text-base mt-4 mb-2 text-foreground/90" dangerouslySetInnerHTML={{ __html: htmlContent }} />)
       }
     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('+ ')) {
       const indentClass = leadingSpaces >= 4 ? 'ml-8' : leadingSpaces >= 2 ? 'ml-6' : 'ml-4'

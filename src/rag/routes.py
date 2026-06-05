@@ -94,8 +94,17 @@ async def ask_tutor(
     cleaned_answer = clean_summary(answer)
     elapsed = time.time() - start
 
-    # Persist assistant response
-    if body.session_id:
+    # Safety/refusal responses must not be saved to DB history either.
+    _REFUSAL_PREFIXES = (
+        "I can't respond on a gibberish",
+        "I can't respond on a NSFW",
+        "I can't respond on a political",
+        "I can't respond on a religious",
+    )
+    is_refusal = any(cleaned_answer.strip().startswith(p) for p in _REFUSAL_PREFIXES)
+
+    # Persist assistant response (only if not a refusal)
+    if body.session_id and not is_refusal:
         try:
             append_session_message(body.session_id, "assistant", cleaned_answer)
         except Exception:
