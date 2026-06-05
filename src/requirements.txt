@@ -26,3 +26,11 @@ python-multipart
 pydantic
 
 supabase
+transformers
+sacremoses
+sentencepiece
+
+# ── ASR Models ──────────────────────────────────────────
+nemo_toolkit[asr]
+soundfile
+librosa
