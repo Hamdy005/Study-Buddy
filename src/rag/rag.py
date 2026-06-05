@@ -4,17 +4,14 @@ import uuid
 import logging
 from functools import lru_cache
 from typing import Optional
-from langchain_core.tools import Tool
+from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_community.utilities import WikipediaAPIWrapper
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain_community.tools import ArxivQueryRun, WikipediaQueryRun, DuckDuckGoSearchResults
-from langchain_core.tools.retriever import create_retriever_tool
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
-from langchain_community.utilities import ArxivAPIWrapper, WikipediaAPIWrapper
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -27,11 +24,10 @@ from .constants import (
     CHAT_TITLE_PROMPT_TEMPLATE,
     WIKI_TOP_K_RESULTS,
     WIKI_DOC_CONTENT_CHARS_MAX,
-    ARXIV_TOP_K_RESULTS,
-    ARXIV_DOC_CONTENT_CHARS_MAX,
+    DUCKDUCKGO_NUM_RESULTS,
     DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
 )
-from .schemas import SearchInput, EmbeddingJob
+from .schemas import EmbeddingJob
 
 logger = logging.getLogger(__name__)
 
@@ -179,70 +175,53 @@ def get_groq_llm():
     )
 
 
-# ── Web Search Tools ───────────────────────────────────
+def get_fallback_gemma_llm():
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
+    logger.info("Initializing fallback LLM with model: google/gemma-4-31b-it")
+    return ChatGoogleGenerativeAI(
+        model="google/gemma-4-31b-it",
+        api_key=settings.gemini_api_key,
+        temperature=0.3,
+        max_output_tokens=2500,
+        timeout=120,
+    )
 
-def web_search_tools(
-    has_material: bool = False,
-    wiki_k: int = WIKI_TOP_K_RESULTS,
-    wiki_chars: int = WIKI_DOC_CONTENT_CHARS_MAX,
-    arxiv_k: int = ARXIV_TOP_K_RESULTS,
-    arxiv_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX,
-    duck_chars: int = DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
-):
 
-    tools = []
+# ── Web Search Helpers ────────────────────────────────
 
+def direct_ddg_search(query: str) -> str:
+    """
+    Run a targeted DuckDuckGo search for *query*.
+    Used for ALL material types (topics, PDFs, URLs) to supplement context.
+    Returns an empty string if the search fails.
+    """
     try:
-        wiki_api = WikipediaAPIWrapper(top_k_results=wiki_k, doc_content_chars_max=wiki_chars)
-        def safe_wiki_run(query: str) -> str:
-            try: return wiki_api.run(query)[:wiki_k * wiki_chars]
-            except Exception as e: return f"Wikipedia search failed: {e}. Try another tool."
-        
-        wikipedia = Tool(
-            name="wikipedia",
-            description="Search Wikipedia for factual, historical, or conceptual questions. Input should be a specific search query.",
-            func=safe_wiki_run,
-            args_schema=SearchInput
-        )
-        tools.append(wikipedia)
+        duck_api = DuckDuckGoSearchResults(num_results=DUCKDUCKGO_NUM_RESULTS)
+        raw = duck_api.run(query)
+        return raw[:DUCKDUCKGO_DOC_CONTENT_CHARS_MAX]
     except Exception as e:
-        logger.warning(f"Skipping Wikipedia Search: {e}")
-        arxiv_k = 4; arxiv_chars = 2500  # reallocate budget
+        logger.warning(f"direct_ddg_search failed: {e}")
+        return ""
 
+
+def direct_wiki_search(query: str) -> str:
+    """
+    Run a targeted Wikipedia search for *query*.
+    Used ONLY for topic-type materials (no PDF/URL).
+    Returns an empty string if the search fails.
+    """
     try:
-        arxiv_api = ArxivAPIWrapper(top_k_results=arxiv_k, doc_content_chars_max=arxiv_chars)
-        def safe_arxiv_run(query: str) -> str:
-            try: return arxiv_api.run(query)[:arxiv_k * arxiv_chars]
-            except Exception as e: return f"Arxiv search failed: {e}. Try another tool."
-
-        arxiv = Tool(
-            name="arxiv",
-            description="Search scientific papers on Arxiv for technical, academic, or research questions in Physics, Math, CS, Biology, etc. Input should be a specific search query.",
-            func=safe_arxiv_run,
-            args_schema=SearchInput
+        wiki_api = WikipediaAPIWrapper(
+            top_k_results=WIKI_TOP_K_RESULTS,
+            doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
         )
-        tools.append(arxiv)
+        result = wiki_api.run(query)
+        return result[:WIKI_DOC_CONTENT_CHARS_MAX]
     except Exception as e:
-        logger.warning(f"Skipping Arxiv Search: {e}")
-        duck_chars += (arxiv_k * arxiv_chars)
+        logger.warning(f"direct_wiki_search failed: {e}")
+        return ""
 
-    try:
-        duck_api = DuckDuckGoSearchResults()
-        def safe_duck_run(query: str) -> str:
-            try: return duck_api.run(query)[:duck_chars]
-            except Exception as e: return f"DuckDuckGo search failed: {e}."
-
-        duck = Tool(
-            name="duckduckgo",
-            description="Search the web for current events, recent news, or general web content. Use when Wikipedia and Arxiv don't have the answer. Input should be a specific search query.",
-            func=safe_duck_run,
-            args_schema=SearchInput
-        )
-        tools.append(duck)
-    except Exception as e:
-        logger.warning(f"Skipping DuckDuckGo Search: {e}")
-
-    return tools
 
 # ── Supabase Retriever  ────────────────
 
@@ -263,18 +242,27 @@ class SupabaseRetriever(BaseRetriever):
 
 # ── RAG Prompt ─────────────────────────────────────────
 
-def _rag_prompt(has_web_tools: bool = True, has_knowledge_retriever: bool = False, subject: str = ""):
-    tools_list = []
-    if has_web_tools:
-        tools_list.append("- **Wikipedia Retriever** for general knowledge and conceptual explanations")
-        tools_list.append("- **Arxiv Retriever** for academic and scientific research information")
-        tools_list.append("- **DuckDuckGo Retriever** for the latest web-based insights")
-    if has_knowledge_retriever:
-        tools_list.append("- **Knowledge Retriever:** for local learning materials (vector embeddings, summaries, raw text chunks)")
-    
+def _rag_prompt(has_ddg: bool = False, has_wiki: bool = False, has_knowledge_retriever: bool = False, subject: str = ""):
+    sources = []
+    if has_wiki:
+        sources.append("Wikipedia snippets")
+    if has_ddg:
+        sources.append("DuckDuckGo web snippets")
+
     tools_section = ""
-    if tools_list:
-        tools_section = "\n<tools>\nYou have access to these tools:\n" + "\n".join(tools_list) + "\n</tools>"
+    if sources:
+        tools_section = (
+            f"\n<web_search_results>\n"
+            f"The following search results ({', '.join(sources)}) were retrieved specifically "
+            f"for this query and are included in <context>.\n"
+            f"</web_search_results>"
+        )
+    if has_knowledge_retriever:
+        tools_section += (
+            "\n<knowledge>\n"
+            "Relevant excerpts from the user's learning material are also included in <context>.\n"
+            "</knowledge>"
+        )
 
     subject_line = f"\nYour current study topic is: **{subject}**." if subject else ""
 
@@ -308,12 +296,7 @@ def rag_answer(
     if material_id:
         mat = get_material(material_id)
 
-    # Determine tool availability
-    # Custom topics (no URL/file) should use web tools
-    if material_id and mat and mat.get("source_type") != "topic":
-        tools = []
-    else:
-        tools = web_search_tools(has_material=False)
+    is_topic = not (material_id and mat and mat.get("source_type") != "topic")
 
     llm = get_groq_llm()
 
@@ -324,67 +307,89 @@ def rag_answer(
     if mat and mat.get("title"):
         context_parts.append(f"Subject / Topic: {mat.get('title')}")
 
-    if material_id and mat and mat.get("source_type") != "topic":
-        results = similarity_search(query, material_id, k=5)
+    if not is_topic:
+        # --- Material-based query (PDF/URL): vector similarity search ---
+        results = similarity_search(query, material_id, k=4)
         if results:
             has_chunks = True
             chunks = [r["content"] for r in results]
-            context_parts.append(f"Relevant Excerpts:\n" + "\n---\n".join(chunks))
+            context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
 
-    # To save tokens, only pass the summary if no specific chunks were found
-    if not has_chunks and summaries:
-        context_parts.append(f"Material Summary (No specific excerpts found for your query):\n{summaries}")
+        # Fallback: summary
+        if not has_chunks and summaries:
+            context_parts.append(f"Material Summary (No specific excerpts found for your query):\n{summaries}")
 
-    # Fallback: If NO chunks matched AND NO summary was generated, pass start and end chunks
-    if not has_chunks and not summaries and material_id and mat and mat.get("source_type") != "topic":
-        all_chunks = get_chunks(material_id)
-        if all_chunks:
-            # Take first 3 and last 2 chunks
-            head = all_chunks[:3]
-            tail = all_chunks[-2:] if len(all_chunks) > 3 else []
-            # Combine without duplicates
-            sampled = head + [c for c in tail if c not in head]
-            sampled_text = "\n---\n".join(c["content"] for c in sampled)
-            context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
+        # Fallback: sample head + tail chunks
+        if not has_chunks and not summaries:
+            all_chunks = get_chunks(material_id)
+            if all_chunks:
+                head = all_chunks[:3]
+                tail = all_chunks[-2:] if len(all_chunks) > 3 else []
+                sampled = head + [c for c in tail if c not in head]
+                sampled_text = "\n---\n".join(c["content"] for c in sampled)
+                context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
+
+    # --- Wikipedia search: topics only ---
+    wiki_snippets = ""
+    if is_topic:
+        wiki_snippets = direct_wiki_search(query)
+        if wiki_snippets:
+            context_parts.append(f"Wikipedia Results:\n{wiki_snippets}")
+
+    # --- DuckDuckGo search: ALL material types (topics, PDFs, URLs) ---
+    ddg_snippets = direct_ddg_search(query)
+    if ddg_snippets:
+        context_parts.append(f"Web Search Results (DuckDuckGo):\n{ddg_snippets}")
 
     context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
 
-    has_knowledge = bool(material_id and mat and mat.get("source_type") != "topic")
+    has_knowledge = not is_topic
     subject_title = mat.get("title") if mat and mat.get("title") else ""
-    prompt = _rag_prompt(has_web_tools=len(tools) > 0, has_knowledge_retriever=has_knowledge, subject=subject_title)
+    prompt = _rag_prompt(
+        has_ddg=bool(ddg_snippets),
+        has_wiki=bool(wiki_snippets),
+        has_knowledge_retriever=has_knowledge,
+        subject=subject_title,
+    )
 
-    if tools:
-        agent = create_tool_calling_agent(llm, tools, prompt)
-        executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            memory=memory,
-            verbose=False,
-            return_intermediate_steps=False,
-            handle_parsing_errors=True,
-            max_iterations=3,
-        )
-        response = executor.invoke({"input": query, "context": context_str})
-        return response["output"], memory
-    else:
-        # Simple LLM call without Agent loop to save tokens and avoid 429
+    try:
+        # All queries now use the simple LLM call (no agent loop).
+        # DDG results are pre-fetched and injected into context above.
         chain = prompt | llm
-        
-        # Load history from memory
+
         memory_vars = memory.load_memory_variables({"input": query})
         chat_history = memory_vars.get("chat_history", [])
-        
+
         response = chain.invoke({
             "input": query,
             "context": context_str,
             "chat_history": chat_history,
-            "agent_scratchpad": ""
+            "agent_scratchpad": "",
         })
-        
+
         answer = response.content
-        # Save to memory manually
         memory.save_context({"input": query}, {"output": answer})
         return answer, memory
+    except Exception as e:
+        logger.warning(f"Groq API call failed or rate-limited: {e}. Falling back to google/gemma-4-31b-it immediately.")
+        try:
+            fallback_llm = get_fallback_gemma_llm()
+            chain = prompt | fallback_llm
+            memory_vars = memory.load_memory_variables({"input": query})
+            chat_history = memory_vars.get("chat_history", [])
+
+            response = chain.invoke({
+                "input": query,
+                "context": context_str,
+                "chat_history": chat_history,
+                "agent_scratchpad": "",
+            })
+            answer = response.content
+            memory.save_context({"input": query}, {"output": answer})
+            return answer, memory
+        except Exception as fallback_err:
+            logger.error(f"Fallback LLM call also failed: {fallback_err}")
+            raise fallback_err
 
 def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     llm = get_groq_llm()
@@ -399,9 +404,22 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
         input_variables=["query"],
         template=formatted_template
     )
-    chain = prompt | llm
-    response = chain.invoke({"query": query})
+    
+    try:
+        chain = prompt | llm
+        response = chain.invoke({"query": query})
+    except Exception as e:
+        logger.warning(f"Groq API call failed or rate-limited in extract_chat_title: {e}. Falling back to google/gemma-4-31b-it immediately.")
+        try:
+            fallback_llm = get_fallback_gemma_llm()
+            chain = prompt | fallback_llm
+            response = chain.invoke({"query": query})
+        except Exception as fallback_err:
+            logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
+            raise fallback_err
+
     title = response.content.strip().strip('"').strip("'")
     if len(title) > 50:
         title = title[:50].rsplit(' ', 1)[0] + '...'
     return title
+

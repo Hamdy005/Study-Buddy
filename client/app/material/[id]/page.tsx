@@ -32,6 +32,7 @@ import {
 import { Logo } from '@/components/logo'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -64,40 +65,63 @@ import { useAuth } from '@/contexts/auth-context'
 import { materialsAPI, tutorAPI, quizAPI, usageAPI } from '@/lib/api'
 import type { Material, ChatMessage, QuizQuestion, QuizResult, ChatSession } from '@/lib/api'
 
+function formatInlineMd(raw: string): string {
+  return raw
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/__(.*?)__/g, '<strong>$1</strong>')
+    .replace(/\*((?!\*)[^*]+)\*/g, '<em>$1</em>')
+    .replace(/_((?!_)[^_]+)_/g, '<em>$1</em>')
+}
+
 function renderMarkdown(text: string) {
   const lines = text.split('\n')
   const elements: React.ReactNode[] = []
   let key = 0
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    const leadingSpaces = line.match(/^\s*/)?.[0].length || 0
     const trimmed = line.trim()
-    const headerMatch = trimmed.match(/^(#{1,3})\s*(.+)/)
+
+    if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+      elements.push(<hr key={key++} className="my-5 border-t border-border/50" />)
+      continue
+    }
+
+    const headerMatch = trimmed.match(/^(#{1,4})\s*(.+)/)
     if (headerMatch) {
       const level = headerMatch[1].length
       const content = headerMatch[2].trim()
       if (level === 1) {
-        elements.push(<h1 key={key++} className="font-bold text-xl mt-4 mb-2">{content}</h1>)
+        elements.push(<h1 key={key++} className="font-bold text-xl mt-5 mb-2 text-foreground">{content}</h1>)
       } else if (level === 2) {
-        elements.push(<h2 key={key++} className="font-bold text-lg mt-4 mb-2">{content}</h2>)
+        elements.push(<h2 key={key++} className="font-bold text-lg mt-5 mb-2 text-foreground">{content}</h2>)
+      } else if (level === 3) {
+        elements.push(
+          <h3 key={key++} className="font-bold text-lg mt-6 mb-2 text-primary border-b border-primary/10 pb-1.5 flex items-center gap-2">
+            {content}
+          </h3>
+        )
       } else {
-        elements.push(<h3 key={key++} className="font-bold text-base mt-3 mb-1">{content}</h3>)
+        elements.push(<h4 key={key++} className="font-semibold text-base mt-4 mb-2 text-foreground/90">{content}</h4>)
       }
     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('+ ')) {
-      const content = DOMPurify.sanitize(trimmed.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
-      elements.push(<li key={key++} className="ml-4 list-disc leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
+      const indentClass = leadingSpaces >= 4 ? 'ml-8' : leadingSpaces >= 2 ? 'ml-6' : 'ml-4'
+      const content = DOMPurify.sanitize(formatInlineMd(trimmed.slice(2)))
+      elements.push(<li key={key++} className={`${indentClass} list-disc leading-relaxed my-1 text-[15px]`} dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed.match(/^\d+\.\s/)) {
-      // Remove the number AND any accidental bullets that follow it (ignore ** so we don't break bolding)
-      const content = DOMPurify.sanitize(trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
-      elements.push(<li key={key++} className="ml-4 list-decimal leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
+      const indentClass = leadingSpaces >= 4 ? 'ml-8' : leadingSpaces >= 2 ? 'ml-6' : 'ml-4'
+      const content = DOMPurify.sanitize(formatInlineMd(trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '')))
+      elements.push(<li key={key++} className={`${indentClass} list-decimal leading-relaxed my-1 text-[15px]`} dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed === '') {
       elements.push(<div key={key++} className="h-2" />)
     } else {
-      const content = DOMPurify.sanitize(line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'))
-      elements.push(<p key={key++} dir="auto" className="leading-relaxed" dangerouslySetInnerHTML={{ __html: content }} />)
+      const content = DOMPurify.sanitize(formatInlineMd(line))
+      elements.push(<p key={key++} dir="auto" className="leading-relaxed my-1.5 text-[15px] text-foreground/90" dangerouslySetInnerHTML={{ __html: content }} />)
     }
   }
   return elements
 }
+
 
 function escapeHtml(str: string): string {
   return str
@@ -1037,7 +1061,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
     setIsCreatingSession(true)
     try {
       const newSession = await tutorAPI.createSession(materialId, 'Untitled Chat')
-      setSessions([newSession, ...sessions])
+      setSessions([...sessions, newSession])
       setCurrentSessionId(newSession.id)
       setMessages([])
     } catch (err) {
@@ -1145,13 +1169,18 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         const trimmed = line.trim()
         if (!trimmed) return '<div style="height:6px"></div>'
 
-        const headerMatch = trimmed.match(/^(#{1,3})\s*(.+)$/)
+        const headerMatch = trimmed.match(/^(#{1,4})\s*(.+)$/)
         if (headerMatch) {
           const level = headerMatch[1].length
           const text = formatInline(headerMatch[2])
-          if (level === 1) return `<h2 style="margin:12px 0 6px;font-size:18px;font-weight:700;">${text}</h2>`
-          if (level === 2) return `<h3 style="margin:10px 0 6px;font-size:16px;font-weight:700;">${text}</h3>`
-          return `<h4 style="margin:8px 0 4px;font-size:14px;font-weight:700;">${text}</h4>`
+          if (level === 1) return `<h2 style="margin:14px 0 6px;font-size:18px;font-weight:700;color:#0f172a;">${text}</h2>`
+          if (level === 2) return `<h3 style="margin:12px 0 6px;font-size:16px;font-weight:700;color:#0f172a;">${text}</h3>`
+          if (level === 3) return `<h3 style="margin:12px 0 6px;font-size:15px;font-weight:700;color:#4f46e5;border-bottom:1px solid #e2e8f0;padding-bottom:2px">${text}</h3>`
+          return `<h4 style="margin:10px 0 4px;font-size:13px;font-weight:700;color:#334155;">${text}</h4>`
+        }
+
+        if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+          return '<hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0"/>'
         }
 
         const bulletMatch = trimmed.match(/^[-*+]\s+(.*)$/)
@@ -1383,12 +1412,18 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
               onSubmit={(e) => { e.preventDefault(); sendMessage() }}
               className="flex gap-2 max-w-3xl mx-auto"
             >
-              <Input
+              <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={currentSessionId ? "Ask anything..." : "Create a session to start chatting"}
                 disabled={!currentSessionId}
-                className="flex-1 rounded-xl bg-muted/30 border-border/50 focus-visible:ring-primary h-10"
+                className="flex-1 rounded-xl bg-muted/30 border-border/50 focus-visible:ring-primary min-h-[40px] max-h-[120px] resize-none py-2 px-3 text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    sendMessage()
+                  }
+                }}
               />
               <Button type="submit" disabled={isLoading || !input.trim() || !currentSessionId} size="icon" className="h-10 w-10 rounded-xl shadow-md">
                 <Send className="h-4 w-4" />

@@ -6,7 +6,7 @@ from typing import Optional
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.tools import create_retriever_tool
 
-from src.rag.rag import get_quiz_llm, web_search_tools, SupabaseRetriever
+from src.rag.rag import get_quiz_llm, SupabaseRetriever
 from .constants import (
     QUIZ_PROMPT_TEMPLATE,
     WEB_QUIZ_PROMPT_TEMPLATE,
