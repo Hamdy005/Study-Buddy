@@ -1,31 +1,54 @@
 # Summarizer Routes
 
-## `POST /api/materials/summarize` — Generate Material Summary
+Generate and fetch structured summaries for study materials.
 
-Generate a structured summary for previously uploaded material (PDF or URL).
+**Headers (All routes):**
+
+| Header | Type | Required | Description |
+|--------|------|----------|-------------|
+| `Authorization` | Bearer Token | Yes | Supabase JWT token |
+
+---
+
+## `POST /api/materials/summarize` — Generate Summary
+
+Generate a structured summary for previously uploaded PDF files, URL articles, or Web topics. Daily limit check of 20 requests applies.
 
 **Request Body (application/json):**
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `material_id` | string | Yes | — | Material ID from upload/scrape |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `material_id` | string | Yes | The study material UUID |
 
-**Response:**
+**Response (200 OK):**
 
 ```json
 {
-  "summary": "string",
-  "time_taken": 5.32
+  "summary": "# Summary Title\n\n- Key Point 1\n- Key Point 2",
+  "time_taken": 4.52
 }
 ```
 
-**Next.js Example:**
+---
 
-```ts
-const res = await fetch(`${BASE_URL}/api/materials/summarize`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ material_id: materialId }),
-});
-const data = await res.json();
+## `GET /api/materials/{material_id}/summary` — Get Stored Summary
+
+Fetch a previously generated summary for a material. Returns `null` if no summary has been generated yet.
+
+**Response (200 OK):**
+
+```json
+{
+  "summary": "# Summary Title\n\n- Key Point 1\n- Key Point 2",
+  "time_taken": 4.52
+}
+```
+
+or (if no summary generated yet):
+
+```json
+{
+  "summary": null,
+  "time_taken": 0
+}
 ```

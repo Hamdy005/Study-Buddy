@@ -30,3 +30,10 @@ transformers
 sacremoses
 sentencepiece
 
+# ── ASR Models ──────────────────────────────────────────
+# English ASR: nvidia/parakeet-tdt-0.6b-v2 via NeMo
+nemo_toolkit[asr]
+# Arabic ASR: IbrahimAmin/egyptian-arabic-wav2vec2-xlsr-53 via HuggingFace
+# (transformers already listed above)
+soundfile
+librosa

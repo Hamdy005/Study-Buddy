@@ -342,3 +342,61 @@ export const quizAPI = {
 export const usageAPI = {
   getUsage: () => fetchAPI<{ used: number; limit: number; remaining: number }>('/api/usage'),
 }
+
+
+export const asrAPI = {
+  /**
+   * Transcribe an audio Blob using the selected language model.
+   * @param audioBlob - The recorded audio (webm/wav/ogg from MediaRecorder)
+   * @param language  - 'en' for Parakeet, 'ar' for wav2vec2
+   */
+  transcribe: async (audioBlob: Blob, language: 'en' | 'ar'): Promise<{ transcript: string }> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+    const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
+
+    const formData = new FormData()
+    formData.append('audio', audioBlob, 'recording.webm')
+    formData.append('language', language)
+
+    // Build headers without Content-Type (browser sets multipart boundary automatically)
+    const headers: Record<string, string> = {}
+    if (hfToken) {
+      headers['Authorization'] = `Bearer ${hfToken}`
+    } else if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    if (token) headers['X-Auth-Token'] = token
+
+    const response = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+
+    if (response.status === 401) {
+      const freshToken = await refreshToken()
+      if (freshToken) {
+        if (freshToken) headers['X-Auth-Token'] = freshToken
+        const retry = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
+          method: 'POST',
+          headers,
+          body: formData,
+        })
+        if (!retry.ok) {
+          const err = await retry.json().catch(() => ({ message: 'Transcription failed' }))
+          throw new Error(err.message || err.detail || 'Transcription failed')
+        }
+        return retry.json()
+      }
+      forceSignOut()
+      throw new Error('Session expired. Please sign in again.')
+    }
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: 'Transcription failed' }))
+      throw new Error(err.message || err.detail || 'Transcription failed')
+    }
+
+    return response.json()
+  },
+}

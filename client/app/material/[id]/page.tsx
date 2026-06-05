@@ -28,6 +28,8 @@ import {
   PanelLeftClose,
   PanelLeft,
   MoreHorizontal,
+  Mic,
+  MicOff,
 } from 'lucide-react'
 import { Logo } from '@/components/logo'
 import { Button } from '@/components/ui/button'
@@ -62,7 +64,7 @@ import { Separator } from '@/components/ui/separator'
 import { UserDropdown } from '@/components/user-dropdown'
 import { UsageStats } from '@/components/usage-stats'
 import { useAuth } from '@/contexts/auth-context'
-import { materialsAPI, tutorAPI, quizAPI, usageAPI } from '@/lib/api'
+import { materialsAPI, tutorAPI, quizAPI, usageAPI, asrAPI } from '@/lib/api'
 import type { Material, ChatMessage, QuizQuestion, QuizResult, ChatSession } from '@/lib/api'
 
 function formatInlineMd(raw: string): string {
@@ -929,6 +931,11 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [renameSessionInput, setRenameSessionInput] = useState('')
+  const [asrLang, setAsrLang] = useState<'en' | 'ar'>('en')
+  const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastUserMessageRef = useRef<HTMLDivElement | null>(null)
   const shouldScrollToUserRef = useRef(false)
@@ -1408,17 +1415,25 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t bg-slate-50 dark:bg-[#0e0e0e]">
+          <div className="border-t bg-slate-50 dark:bg-[#0e0e0e]">
             <form
               onSubmit={(e) => { e.preventDefault(); sendMessage() }}
-              className="flex gap-2 max-w-3xl mx-auto"
+              className="max-w-3xl mx-auto"
             >
+              {/* Textarea — rounded bottom removed so action bar sits flush */}
               <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={currentSessionId ? "Ask anything..." : "Create a session to start chatting"}
+                placeholder={
+                  !currentSessionId
+                    ? 'Create a session to start chatting'
+                    : asrLang === 'ar'
+                    ? 'اسأل أي شيء...'
+                    : 'Ask anything...'
+                }
+                dir={asrLang === 'ar' ? 'rtl' : 'ltr'}
                 disabled={!currentSessionId}
-                className="flex-1 rounded-xl bg-muted/30 border-border/50 focus-visible:ring-primary min-h-[40px] max-h-[120px] resize-none py-2 px-3 text-sm"
+                className="w-full rounded-t-xl rounded-b-none bg-muted/30 border-border/50 border-b-0 focus-visible:ring-primary min-h-[44px] max-h-[120px] resize-none py-2 px-3 text-sm"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
@@ -1426,9 +1441,135 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                   }
                 }}
               />
-              <Button type="submit" disabled={isLoading || !input.trim() || !currentSessionId} size="icon" className="h-10 w-10 rounded-xl shadow-md">
-                <Send className="h-4 w-4" />
-              </Button>
+
+              {/* Action bar — sits flush below the textarea */}
+              <div className="flex items-center justify-between px-2 py-1.5 rounded-b-xl border border-t-0 border-border/50 bg-muted/20">
+                {/* Left: EN | AR segmented language toggle */}
+                <div className="flex items-center gap-1 bg-background/60 border border-border/50 rounded-lg p-0.5">
+                  <button
+                    type="button"
+                    id="asr-lang-en"
+                    onClick={() => setAsrLang('en')}
+                    disabled={isRecording || isTranscribing}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      asrLang === 'en'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    EN
+                  </button>
+                  <button
+                    type="button"
+                    id="asr-lang-ar"
+                    onClick={() => setAsrLang('ar')}
+                    disabled={isRecording || isTranscribing}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      asrLang === 'ar'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    AR
+                  </button>
+                </div>
+
+                {/* Right: Mic + Send */}
+                <div className="flex items-center gap-1.5">
+                  {/* Mic button */}
+                  <button
+                    type="button"
+                    id="asr-mic-button"
+                    disabled={!currentSessionId || isTranscribing}
+                    onClick={async () => {
+                      if (isRecording) {
+                        // Stop recording
+                        mediaRecorderRef.current?.stop()
+                        setIsRecording(false)
+                      } else {
+                        // Start recording
+                        try {
+                          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+                          audioChunksRef.current = []
+                          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                            ? 'audio/webm;codecs=opus'
+                            : 'audio/webm'
+                          const recorder = new MediaRecorder(stream, { mimeType })
+                          mediaRecorderRef.current = recorder
+
+                          recorder.ondataavailable = (e) => {
+                            if (e.data.size > 0) audioChunksRef.current.push(e.data)
+                          }
+
+                          recorder.onstop = async () => {
+                            // Stop all mic tracks
+                            stream.getTracks().forEach(t => t.stop())
+                            const blob = new Blob(audioChunksRef.current, { type: mimeType })
+                            audioChunksRef.current = []
+                            if (blob.size === 0) {
+                              toast.error('No audio recorded. Please try again.')
+                              return
+                            }
+                            setIsTranscribing(true)
+                            try {
+                              const { transcript } = await asrAPI.transcribe(blob, asrLang)
+                              if (transcript.trim()) {
+                                setInput(prev => prev ? `${prev} ${transcript}` : transcript)
+                              } else {
+                                toast.error(asrLang === 'ar'
+                                  ? 'لم يتم التعرف على الصوت. حاول مرة أخرى.'
+                                  : 'Could not understand audio. Please try again.')
+                              }
+                            } catch (err: any) {
+                              toast.error(err.message || 'Transcription failed')
+                            } finally {
+                              setIsTranscribing(false)
+                            }
+                          }
+
+                          recorder.start()
+                          setIsRecording(true)
+                        } catch (err) {
+                          toast.error('Microphone access denied. Please allow microphone permissions.')
+                        }
+                      }
+                    }}
+                    className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
+                      isTranscribing
+                        ? 'bg-muted text-muted-foreground cursor-wait'
+                        : isRecording
+                        ? 'bg-red-500 text-white shadow-md'
+                        : !currentSessionId
+                        ? 'text-muted-foreground/40 cursor-not-allowed'
+                        : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+                    }`}
+                    title={isRecording ? 'Stop recording' : `Record voice (${asrLang === 'en' ? 'English' : 'Arabic'})`}
+                  >
+                    {isTranscribing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : isRecording ? (
+                      <>
+                        {/* Pulse ring when recording */}
+                        <span className="absolute inset-0 rounded-lg bg-red-400 opacity-40 animate-ping" />
+                        <MicOff className="h-4 w-4 relative" />
+                      </>
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
+                  </button>
+
+                  {/* Send button */}
+                  <Button
+                    type="submit"
+                    id="chat-send-button"
+                    disabled={isLoading || !input.trim() || !currentSessionId}
+                    size="icon"
+                    className="h-8 w-8 rounded-lg shadow-sm"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
             </form>
           </div>
         </div>

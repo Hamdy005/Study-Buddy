@@ -11,6 +11,7 @@ from src.summary_generator.routes import router as summary_router
 from src.rag.routes import router as tutor_router
 from src.quiz_generator.routes import router as quiz_router
 from src.auth.routes import router as auth_router
+from src.asr.routes import router as asr_router
 from src.store import get_usage
 from src.dependencies import get_current_user_id
 from src.config import settings 
@@ -51,10 +52,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Embedder failed to load: {e}")
 
+    # Eagerly load ASR models so warmup runs at startup, not on first request
+    try:
+        from src.asr.models import get_audio_model_en
+        get_audio_model_en()
+    except Exception as e:
+        logger.warning(f"English ASR model failed to load: {e}")
 
+    try:
+        from src.asr.models import get_audio_model_ar
+        get_audio_model_ar()
+    except Exception as e:
+        logger.warning(f"Arabic ASR model failed to load: {e}")
 
     from src.rag.batch_workers import start_workers
     start_workers()
+
+    from src.asr.batch_workers import start_asr_workers
+    start_asr_workers()
 
     yield
 
@@ -87,6 +102,7 @@ app.include_router(summary_router)
 app.include_router(tutor_router)
 app.include_router(quiz_router)
 app.include_router(auth_router)
+app.include_router(asr_router)
 
 
 @app.get("/")
