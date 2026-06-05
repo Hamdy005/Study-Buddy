@@ -20,6 +20,45 @@ _ALLOWED_MIME_PREFIXES = ("audio/", "video/webm")  # webm is video/* but contain
 _ASR_TIMEOUT_S = 60  # max seconds to wait for a transcription result
 
 
+def convert_to_wav_16k(input_path: str) -> str:
+    """
+    Convert an input audio file (e.g. .webm, .ogg, .mp3) to a standard 16kHz mono WAV file
+    using ffmpeg. If ffmpeg is not available or fails, returns the original path.
+    """
+    import subprocess
+    import tempfile
+    import os
+
+    fd, output_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-ar", "16000",
+        "-ac", "1",
+        "-f", "wav",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
+        # Delete original temporary file if conversion succeeded
+        try:
+            os.unlink(input_path)
+        except Exception:
+            pass
+        return output_path
+    except Exception as e:
+        logger.warning(f"ffmpeg conversion failed: {e}. Falling back to original file.")
+        try:
+            os.unlink(output_path)
+        except Exception:
+            pass
+        return input_path
+
+
 @router.post("/transcribe")
 async def transcribe_audio(
     audio: UploadFile = File(..., description="Audio recording from the browser (.webm, .wav, .ogg)"),
@@ -58,6 +97,9 @@ async def transcribe_audio(
     except Exception as e:
         logger.error(f"Failed to save audio upload: {e}", exc_info=True)
         raise HTTPException(500, "Failed to save audio file.")
+
+    # Convert to standard 16kHz mono WAV format using ffmpeg
+    tmp_path = convert_to_wav_16k(tmp_path)
 
     # Create job and queue it
     job_id = str(uuid.uuid4())

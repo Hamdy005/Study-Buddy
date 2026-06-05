@@ -1214,9 +1214,9 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   }
 
   return (
-    <div className="h-[750px] flex flex-col overflow-hidden border border-border/50 shadow-sm bg-card rounded-xl">
+    <div className="h-[750px] flex flex-col overflow-hidden border border-border/50 dark:border-white/[0.06] shadow-sm bg-card rounded-xl">
       {/* Header */}
-      <div className="px-4 border-b bg-slate-50 dark:bg-[#0e0e0e] h-20 flex items-center justify-between shrink-0 group">
+      <div className="px-4 border-b border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] h-20 flex items-center justify-between shrink-0 group">
         <div className="flex items-center gap-3 min-w-0">
           <Button
             variant="ghost"
@@ -1266,7 +1266,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Sidebar */}
         {sidebarOpen && (
-          <div className="hidden md:flex flex-col w-60 border-r bg-slate-50 dark:bg-[#0e0e0e] min-h-0">
+          <div className="hidden md:flex flex-col w-60 border-r border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] min-h-0">
             <div className="p-4 border-b">
               <Button
                 onClick={createNewSession}
@@ -1415,159 +1415,161 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
           </div>
 
           {/* Input */}
-          <div className="border-t bg-slate-50 dark:bg-[#0e0e0e]">
+          <div className="bg-transparent px-4 pb-4 md:px-6 md:pb-6 pt-0 shrink-0">
             <form
               onSubmit={(e) => { e.preventDefault(); sendMessage() }}
               className="max-w-3xl mx-auto"
             >
-              {/* Textarea — rounded bottom removed so action bar sits flush */}
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={
-                  !currentSessionId
-                    ? 'Create a session to start chatting'
-                    : asrLang === 'ar'
-                    ? 'اسأل أي شيء...'
-                    : 'Ask anything...'
-                }
-                dir={asrLang === 'ar' ? 'rtl' : 'ltr'}
-                disabled={!currentSessionId}
-                className="w-full rounded-t-xl rounded-b-none bg-muted/30 border-border/50 border-b-0 focus-visible:ring-primary min-h-[44px] max-h-[120px] resize-none py-2 px-3 text-sm"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    sendMessage()
+              {/* Unified single container */}
+              <div className="rounded-2xl border border-border/50 dark:border-white/[0.09] bg-[#f4f4f5]/70 dark:bg-[#2a2a2e] p-2 shadow-sm transition-all duration-150 focus-within:border-border/70 focus-within:bg-[#f0f0f1] dark:focus-within:border-white/[0.14] dark:focus-within:bg-[#303036]">
+                <Textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={
+                    !currentSessionId
+                      ? 'Create a session to start chatting'
+                      : asrLang === 'ar'
+                      ? 'اسأل أي شيء...'
+                      : 'Ask anything...'
                   }
-                }}
-              />
+                  dir={asrLang === 'ar' ? 'rtl' : 'ltr'}
+                  disabled={!currentSessionId}
+                  className="w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none focus:ring-0 min-h-[50px] max-h-[120px] resize-none py-1.5 px-2.5 text-sm placeholder:text-muted-foreground/60 shadow-none"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      sendMessage()
+                    }
+                  }}
+                />
 
-              {/* Action bar — sits flush below the textarea */}
-              <div className="flex items-center justify-between px-2 py-1.5 rounded-b-xl border border-t-0 border-border/50 bg-muted/20">
-                {/* Left: EN | AR segmented language toggle */}
-                <div className="flex items-center gap-1 bg-background/60 border border-border/50 rounded-lg p-0.5">
-                  <button
-                    type="button"
-                    id="asr-lang-en"
-                    onClick={() => setAsrLang('en')}
-                    disabled={isRecording || isTranscribing}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                      asrLang === 'en'
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    EN
-                  </button>
-                  <button
-                    type="button"
-                    id="asr-lang-ar"
-                    onClick={() => setAsrLang('ar')}
-                    disabled={isRecording || isTranscribing}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                      asrLang === 'ar'
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    AR
-                  </button>
-                </div>
+                {/* Action bar — sits inline inside the container */}
+                <div className="flex items-center justify-between pt-1 px-1 bg-transparent">
+                  {/* Left: EN | AR segmented language toggle */}
+                  <div className="flex items-center gap-1 bg-background/60 dark:bg-background/40 border border-border/50 rounded-lg p-0.5">
+                    <button
+                      type="button"
+                      id="asr-lang-en"
+                      onClick={() => setAsrLang('en')}
+                      disabled={isRecording || isTranscribing}
+                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold transition-all ${
+                        asrLang === 'en'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      EN
+                    </button>
+                    <button
+                      type="button"
+                      id="asr-lang-ar"
+                      onClick={() => setAsrLang('ar')}
+                      disabled={isRecording || isTranscribing}
+                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold transition-all ${
+                        asrLang === 'ar'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      AR
+                    </button>
+                  </div>
 
-                {/* Right: Mic + Send */}
-                <div className="flex items-center gap-1.5">
-                  {/* Mic button */}
-                  <button
-                    type="button"
-                    id="asr-mic-button"
-                    disabled={!currentSessionId || isTranscribing}
-                    onClick={async () => {
-                      if (isRecording) {
-                        // Stop recording
-                        mediaRecorderRef.current?.stop()
-                        setIsRecording(false)
-                      } else {
-                        // Start recording
-                        try {
-                          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-                          audioChunksRef.current = []
-                          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                            ? 'audio/webm;codecs=opus'
-                            : 'audio/webm'
-                          const recorder = new MediaRecorder(stream, { mimeType })
-                          mediaRecorderRef.current = recorder
-
-                          recorder.ondataavailable = (e) => {
-                            if (e.data.size > 0) audioChunksRef.current.push(e.data)
-                          }
-
-                          recorder.onstop = async () => {
-                            // Stop all mic tracks
-                            stream.getTracks().forEach(t => t.stop())
-                            const blob = new Blob(audioChunksRef.current, { type: mimeType })
+                  {/* Right: Mic + Send */}
+                  <div className="flex items-center gap-1.5">
+                    {/* Mic button */}
+                    <button
+                      type="button"
+                      id="asr-mic-button"
+                      disabled={!currentSessionId || isTranscribing}
+                      onClick={async () => {
+                        if (isRecording) {
+                          // Stop recording
+                          mediaRecorderRef.current?.stop()
+                          setIsRecording(false)
+                        } else {
+                          // Start recording
+                          try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
                             audioChunksRef.current = []
-                            if (blob.size === 0) {
-                              toast.error('No audio recorded. Please try again.')
-                              return
+                            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                              ? 'audio/webm;codecs=opus'
+                              : 'audio/webm'
+                            const recorder = new MediaRecorder(stream, { mimeType })
+                            mediaRecorderRef.current = recorder
+
+                            recorder.ondataavailable = (e) => {
+                              if (e.data.size > 0) audioChunksRef.current.push(e.data)
                             }
-                            setIsTranscribing(true)
-                            try {
-                              const { transcript } = await asrAPI.transcribe(blob, asrLang)
-                              if (transcript.trim()) {
-                                setInput(prev => prev ? `${prev} ${transcript}` : transcript)
-                              } else {
-                                toast.error(asrLang === 'ar'
-                                  ? 'لم يتم التعرف على الصوت. حاول مرة أخرى.'
-                                  : 'Could not understand audio. Please try again.')
+
+                            recorder.onstop = async () => {
+                              // Stop all mic tracks
+                              stream.getTracks().forEach(t => t.stop())
+                              const blob = new Blob(audioChunksRef.current, { type: mimeType })
+                              audioChunksRef.current = []
+                              if (blob.size === 0) {
+                                toast.error('No audio recorded. Please try again.')
+                                return
                               }
-                            } catch (err: any) {
-                              toast.error(err.message || 'Transcription failed')
-                            } finally {
-                              setIsTranscribing(false)
+                              setIsTranscribing(true)
+                              try {
+                                const { transcript } = await asrAPI.transcribe(blob, asrLang)
+                                if (transcript.trim()) {
+                                  setInput(prev => prev ? `${prev} ${transcript}` : transcript)
+                                } else {
+                                  toast.error(asrLang === 'ar'
+                                    ? 'لم يتم التعرف على الصوت. حاول مرة أخرى.'
+                                    : 'Could not understand audio. Please try again.')
+                                }
+                              } catch (err: any) {
+                                toast.error(err.message || 'Transcription failed')
+                              } finally {
+                                setIsTranscribing(false)
+                              }
                             }
+
+                            recorder.start()
+                            setIsRecording(true)
+                          } catch (err) {
+                            toast.error('Microphone access denied. Please allow microphone permissions.')
                           }
-
-                          recorder.start()
-                          setIsRecording(true)
-                        } catch (err) {
-                          toast.error('Microphone access denied. Please allow microphone permissions.')
                         }
-                      }
-                    }}
-                    className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
-                      isTranscribing
-                        ? 'bg-muted text-muted-foreground cursor-wait'
-                        : isRecording
-                        ? 'bg-red-500 text-white shadow-md'
-                        : !currentSessionId
-                        ? 'text-muted-foreground/40 cursor-not-allowed'
-                        : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-                    }`}
-                    title={isRecording ? 'Stop recording' : `Record voice (${asrLang === 'en' ? 'English' : 'Arabic'})`}
-                  >
-                    {isTranscribing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : isRecording ? (
-                      <>
-                        {/* Pulse ring when recording */}
-                        <span className="absolute inset-0 rounded-lg bg-red-400 opacity-40 animate-ping" />
-                        <MicOff className="h-4 w-4 relative" />
-                      </>
-                    ) : (
-                      <Mic className="h-4 w-4" />
-                    )}
-                  </button>
+                      }}
+                      className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
+                        isTranscribing
+                          ? 'bg-muted text-muted-foreground cursor-wait'
+                          : isRecording
+                          ? 'bg-red-500 text-white shadow-md'
+                          : !currentSessionId
+                          ? 'text-muted-foreground/40 cursor-not-allowed'
+                          : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+                      }`}
+                      title={isRecording ? 'Stop recording' : `Record voice (${asrLang === 'en' ? 'English' : 'Arabic'})`}
+                    >
+                      {isTranscribing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : isRecording ? (
+                        <>
+                          {/* Pulse ring when recording */}
+                          <span className="absolute inset-0 rounded-lg bg-red-400 opacity-40 animate-ping" />
+                          <MicOff className="h-4 w-4 relative" />
+                        </>
+                      ) : (
+                        <Mic className="h-4 w-4" />
+                      )}
+                    </button>
 
-                  {/* Send button */}
-                  <Button
-                    type="submit"
-                    id="chat-send-button"
-                    disabled={isLoading || !input.trim() || !currentSessionId}
-                    size="icon"
-                    className="h-8 w-8 rounded-lg shadow-sm"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                  </Button>
+                    {/* Send button */}
+                    <Button
+                      type="submit"
+                      id="chat-send-button"
+                      disabled={isLoading || !input.trim() || !currentSessionId}
+                      size="icon"
+                      className="h-8 w-8 rounded-lg shadow-sm"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </form>
