@@ -7,20 +7,12 @@ from src.database import get_auth_supabase, get_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
 from src.dependencies import get_current_user_id, get_current_user
 from .schemas import ProfileUpdateRequest
-
-ALLOWED_MIME_TYPES = {
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/webp",
-    "image/gif",
-    "image/avif",
-    "image/svg+xml",
-}
-MAX_FILE_SIZE_BYTES = 6 * 1024 * 1024  # 6 MB
-AVATAR_BUCKET = "avatars"
-
-PLACEHOLDER_DOMAINS = ["@placeholder.ai", "@studymate.ai"]
+from .constants import (
+    ALLOWED_MIME_TYPES,
+    MAX_FILE_SIZE_BYTES,
+    AVATAR_BUCKET,
+    PLACEHOLDER_DOMAINS,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
