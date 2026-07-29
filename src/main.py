@@ -1,6 +1,13 @@
 import logging
 import logging.handlers
 import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,7 +67,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"English ASR model failed to load: {e}")
 
     try:
-        from src.asr.models import get_audio_model_ar
+        from src.asr.models import get_audio_model_ard
         get_audio_model_ar()
     except Exception as e:
         logger.warning(f"Arabic ASR model failed to load: {e}")
@@ -118,3 +125,8 @@ async def health_check():
 @app.get("/api/usage")
 async def get_user_usage(user_id: str = Depends(get_current_user_id)):
     return get_usage(user_id)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)

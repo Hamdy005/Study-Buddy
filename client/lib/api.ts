@@ -155,11 +155,62 @@ export const authAPI = {
   getProfile: () =>
     fetchAPI<{ status: string; user: User }>('/api/auth/profile'),
 
-  updateProfile: (data: { name?: string; avatar_url?: string }) =>
+  updateProfile: (data: { name?: string; avatar_url?: string; theme?: string }) =>
     fetchAPI<{ status: string; user: User }>('/api/auth/profile', {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+
+  /** Upload an avatar image to Supabase Storage via the backend.
+   *  Returns the public URL to save in profiles.avatar_url. */
+  uploadAvatar: async (file: File): Promise<{ status: string; avatar_url: string }> => {
+    let token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+
+    const makeHeaders = (t: string | null) => {
+      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
+      return {
+        ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
+        ...(!hfToken && t && { Authorization: `Bearer ${t}` }),
+        ...(t && { 'X-Auth-Token': t }),
+      }
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    let response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
+      method: 'POST',
+      headers: makeHeaders(token),
+      body: formData,
+    })
+
+    // Token-refresh retry
+    if (response.status === 401) {
+      const freshToken = await refreshToken()
+      if (freshToken) {
+        token = freshToken
+        response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
+          method: 'POST',
+          headers: makeHeaders(token),
+          body: formData,
+        })
+        if (response.status === 401) {
+          forceSignOut()
+          throw new Error('Session expired. Please sign in again.')
+        }
+      } else {
+        forceSignOut()
+        throw new Error('Session expired. Please sign in again.')
+      }
+    }
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Failed to upload avatar' }))
+      throw new Error(error.message || error.detail || 'Failed to upload avatar')
+    }
+
+    return response.json()
+  },
 }
 
 export const materialsAPI = {

@@ -99,15 +99,20 @@ export default function ProfilePage() {
     }
   }
 
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setFormData((prev) => ({ ...prev, avatar: reader.result as string }))
-        toast.success('Avatar updated!')
-      }
-      reader.readAsDataURL(file)
+    if (!file) return
+
+    // Reset the input so the same file can be re-selected after an error
+    e.target.value = ''
+
+    const toastId = toast.loading('Uploading avatar…')
+    try {
+      const res = await authAPI.uploadAvatar(file)
+      setFormData((prev) => ({ ...prev, avatar: res.avatar_url }))
+      toast.success('Avatar uploaded!', { id: toastId })
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to upload avatar', { id: toastId })
     }
   }
 

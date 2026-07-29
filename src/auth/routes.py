@@ -1,16 +1,79 @@
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi import Depends
 from typing import Optional
 
-from src.database import get_auth_supabase
+from src.database import get_auth_supabase, get_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
 from src.dependencies import get_current_user_id, get_current_user
 from .schemas import ProfileUpdateRequest
 
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+    "image/svg+xml",
+}
+MAX_FILE_SIZE_BYTES = 6 * 1024 * 1024  # 6 MB
+AVATAR_BUCKET = "avatars"
+
 PLACEHOLDER_DOMAINS = ["@placeholder.ai", "@studymate.ai"]
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
+
+
+@router.post("/upload-avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Upload a profile avatar image to Supabase Storage and return its public URL."""
+
+    # 1. Validate MIME type
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            400,
+            f"Unsupported file type '{file.content_type}'. "
+            f"Allowed types: {', '.join(sorted(ALLOWED_MIME_TYPES))}",
+        )
+
+    # 2. Read file bytes and validate size
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            400,
+            f"File is too large ({len(content) // 1024} KB). Maximum allowed size is 6 MB.",
+        )
+
+    # 3. Build a unique storage path: avatars/<user_id>/<uuid>.<ext>
+    ext = (file.filename or "image").rsplit(".", 1)[-1].lower()
+    if ext not in {"jpg", "jpeg", "png", "webp", "gif", "avif", "svg"}:
+        ext = "jpg"  # safe fallback
+    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
+
+    # 4. Upload to Supabase Storage using the service-role client
+    client = get_supabase()
+    if client is None:
+        raise HTTPException(503, "Storage service unavailable")
+
+    try:
+        client.storage.from_(AVATAR_BUCKET).upload(
+            path=storage_path,
+            file=content,
+            file_options={"content-type": file.content_type, "upsert": "true"},
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to upload avatar: {e}")
+
+    # 5. Get the public URL from the bucket
+    public_url_resp = client.storage.from_(AVATAR_BUCKET).get_public_url(storage_path)
+    public_url = public_url_resp if isinstance(public_url_resp, str) else str(public_url_resp)
+
+    return {"status": "success", "avatar_url": public_url}
+
 
 @router.delete("/me")
 async def delete_account(user_id: str = Depends(get_current_user_id)):
