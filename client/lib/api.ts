@@ -155,11 +155,18 @@ export const authAPI = {
   getProfile: () =>
     fetchAPI<{ status: string; user: User }>('/api/auth/profile'),
 
-  updateProfile: (data: { name?: string; avatar_url?: string; theme?: string }) =>
+  updateProfile: (data: {
+    name?: string
+    avatar_url?: string
+    theme?: string
+    current_password?: string
+    password?: string
+  }) =>
     fetchAPI<{ status: string; user: User }>('/api/auth/profile', {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+
 
   /** Upload an avatar image to Supabase Storage via the backend.
    *  Returns the public URL to save in profiles.avatar_url. */

@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"English ASR model failed to load: {e}")
 
     try:
-        from src.asr.models import get_audio_model_ard
+        from src.asr.models import get_audio_model_ar
         get_audio_model_ar()
     except Exception as e:
         logger.warning(f"Arabic ASR model failed to load: {e}")

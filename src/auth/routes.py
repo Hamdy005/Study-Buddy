@@ -1,8 +1,11 @@
 import uuid
+import cloudinary
+import cloudinary.uploader
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi import Depends
 from typing import Optional
 
+from src.config import settings
 from src.database import get_auth_supabase, get_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
 from src.dependencies import get_current_user_id, get_current_user
@@ -22,7 +25,7 @@ async def upload_avatar(
     file: UploadFile = File(...),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Upload a profile avatar image to Supabase Storage and return its public URL."""
+    """Upload a profile avatar image to Cloudinary and return its public URL."""
 
     # 1. Validate MIME type
     if file.content_type not in ALLOWED_MIME_TYPES:
@@ -40,31 +43,33 @@ async def upload_avatar(
             f"File is too large ({len(content) // 1024} KB). Maximum allowed size is 6 MB.",
         )
 
-    # 3. Build a unique storage path: avatars/<user_id>/<uuid>.<ext>
-    ext = (file.filename or "image").rsplit(".", 1)[-1].lower()
-    if ext not in {"jpg", "jpeg", "png", "webp", "gif", "avif", "svg"}:
-        ext = "jpg"  # safe fallback
-    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
+    # 3. Configure Cloudinary
+    if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
+        raise HTTPException(503, "Cloudinary service is not configured")
 
-    # 4. Upload to Supabase Storage using the service-role client
-    client = get_supabase()
-    if client is None:
-        raise HTTPException(503, "Storage service unavailable")
+    cloudinary.config(
+        cloud_name=settings.cloudinary_cloud_name,
+        api_key=settings.cloudinary_api_key,
+        api_secret=settings.cloudinary_api_secret,
+        secure=True,
+    )
 
+    # 4. Upload to Cloudinary with smart face-cropping & auto webp conversion
     try:
-        client.storage.from_(AVATAR_BUCKET).upload(
-            path=storage_path,
-            file=content,
-            file_options={"content-type": file.content_type, "upsert": "true"},
+        response = cloudinary.uploader.upload(
+            content,
+            folder="avatars",
+            public_id=f"avatar_{user_id}",
+            overwrite=True,
+            transformation=[
+                {"width": 300, "height": 300, "crop": "fill", "gravity": "face"},
+                {"fetch_format": "auto", "quality": "auto"}
+            ]
         )
+        public_url = response.get("secure_url") or response.get("url")
+        return {"status": "success", "avatar_url": public_url}
     except Exception as e:
-        raise HTTPException(500, f"Failed to upload avatar: {e}")
-
-    # 5. Get the public URL from the bucket
-    public_url_resp = client.storage.from_(AVATAR_BUCKET).get_public_url(storage_path)
-    public_url = public_url_resp if isinstance(public_url_resp, str) else str(public_url_resp)
-
-    return {"status": "success", "avatar_url": public_url}
+        raise HTTPException(500, f"Failed to upload avatar to Cloudinary: {e}")
 
 
 @router.delete("/me")
@@ -164,6 +169,44 @@ async def get_profile(
 
 @router.patch("/profile")
 async def update_profile(body: ProfileUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    # Reject raw base64 image data — images must be uploaded via /upload-avatar first
+    if body.avatar_url and body.avatar_url.startswith("data:"):
+        raise HTTPException(
+            400,
+            "Storing raw image data is not allowed. "
+            "Upload the image via POST /api/auth/upload-avatar and use the returned URL instead."
+        )
+
+    # Handle password update if password is provided
+    if body.password is not None:
+        # Verify current password if provided
+
+        if body.current_password:
+            user_data = get_user_by_id(user_id)
+            user_email = user_data.get("email") if user_data else None
+            if user_email and not any(domain in user_email for domain in PLACEHOLDER_DOMAINS):
+                auth_client = get_auth_supabase()
+                if auth_client:
+                    try:
+                        res = auth_client.auth.sign_in_with_password({
+                            "email": user_email,
+                            "password": body.current_password
+                        })
+                        if hasattr(res, "error") and res.error:
+                            raise HTTPException(400, "Current password is incorrect.")
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        raise HTTPException(400, "Current password is incorrect.")
+
+        # Update password in Supabase Auth
+        admin_client = get_supabase()
+        if admin_client:
+            try:
+                admin_client.auth.admin.update_user_by_id(user_id, {"password": body.password})
+            except Exception as e:
+                raise HTTPException(500, f"Failed to update password: {e}")
+
     try:
         updated_user = update_user_profile(
             user_id,
@@ -176,3 +219,4 @@ async def update_profile(body: ProfileUpdateRequest, user_id: str = Depends(get_
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"Failed to update profile: {e}")
+

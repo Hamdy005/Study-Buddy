@@ -14,6 +14,9 @@ import {
   Moon,
   Sun,
   Monitor,
+  Eye,
+  EyeOff,
+  Lock,
 } from 'lucide-react'
 import { Logo } from '@/components/logo'
 import { Button } from '@/components/ui/button'
@@ -46,6 +49,16 @@ export default function ProfilePage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [passwordData, setPasswordData] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  })
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [isChangingPassword, setIsChangingPassword] = useState(false)
+
 
   // Initialize theme from user profile
   useEffect(() => {
@@ -126,7 +139,47 @@ export default function ProfilePage() {
 
   })
   }
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!passwordData.currentPassword) {
+      toast.error('Please enter your current password.')
+      return
+    }
+    if (!passwordData.newPassword) {
+      toast.error('Please enter a new password.')
+      return
+    }
+    if (passwordData.newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters long.')
+      return
+    }
+    if (passwordData.newPassword !== passwordData.confirmPassword) {
+      toast.error('New passwords do not match.')
+      return
+    }
+
+    setIsChangingPassword(true)
+    try {
+      await authAPI.updateProfile({
+        current_password: passwordData.currentPassword,
+        password: passwordData.newPassword,
+      })
+      toast.success('Password updated successfully!')
+      setPasswordData({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      })
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update password')
+    } finally {
+      setIsChangingPassword(false)
+    }
+  }
+
   const handleDeleteAccount = async () => {
+
     setIsDeleting(true)
     try {
       await authAPI.deleteAccount()
@@ -263,8 +316,89 @@ export default function ProfilePage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Change Password</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="currentPassword">Current Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="currentPassword"
+                      type={showCurrentPassword ? 'text' : 'password'}
+                      value={passwordData.currentPassword}
+                      onChange={(e) => setPasswordData((prev) => ({ ...prev, currentPassword: e.target.value }))}
+                      disabled={isChangingPassword}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                    >
+                      {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newPassword">New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="newPassword"
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={passwordData.newPassword}
+                      onChange={(e) => setPasswordData((prev) => ({ ...prev, newPassword: e.target.value }))}
+                      disabled={isChangingPassword}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                    >
+                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Password must be at least 8 characters.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="confirmPassword"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={passwordData.confirmPassword}
+                      onChange={(e) => setPasswordData((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                      disabled={isChangingPassword}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <Button type="submit" disabled={isChangingPassword}>
+                  {isChangingPassword ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Changing Password...</>
+                  ) : (
+                    'Change Password'
+                  )}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Appearance</CardTitle>
               <CardDescription>Customize how Study Buddy looks on your device</CardDescription>
+
             </CardHeader>
             <CardContent>
               <div className="space-y-3">

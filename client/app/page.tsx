@@ -3,9 +3,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Loader2, Sparkles, MessageSquare, Brain, FileText } from 'lucide-react'
+import Link from 'next/link'
+import { Loader2, Sparkles, MessageSquare, Brain, FileText, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import { Logo } from '@/components/logo'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/auth-context'
@@ -43,10 +46,39 @@ const features = [
 
 export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const { user, isLoading: isAuthLoading, logout } = useAuth()
   const router = useRouter()
   const { resolvedTheme } = useTheme()
   const [btnWidth, setBtnWidth] = useState(384)
+
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!email || !password) {
+      toast.error('Please enter both email and password')
+      return
+    }
+    setIsSubmitting(true)
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      })
+      if (error) {
+        toast.error(error.message)
+      } else {
+        toast.success('Signed in successfully!')
+        router.replace('/dashboard')
+      }
+    } catch {
+      toast.error('Sign in failed. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -201,7 +233,7 @@ export default function HomePage() {
         >
 
           {/* Heading */}
-          <div className="space-y-2 pt-1">
+          <div className="space-y-1.5 pt-1">
             <h2 className="text-2xl font-bold text-foreground">Welcome back</h2>
             <p className="text-muted-foreground text-sm">
               Sign in to continue your learning journey
@@ -214,8 +246,92 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Sign in card */}
-          <div className="space-y-4">
+          {/* Sign in form & OAuth */}
+          <div className="space-y-5">
+            <form onSubmit={handleEmailSignIn} className="space-y-3.5">
+              <div className="space-y-1.5">
+                <Label htmlFor="email" className="text-xs font-medium text-muted-foreground">
+                  Email address
+                </Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="Email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="pl-9 h-11 bg-card/50 border-border/60 focus-visible:ring-primary"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="password" className="text-xs font-medium text-muted-foreground">
+                  Password
+                </Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="pl-9 pr-10 h-11 bg-card/50 border-border/60 focus-visible:ring-primary"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <Button
+                type="submit"
+                disabled={isSubmitting || isLoading}
+                className="w-full h-11 text-sm font-semibold shadow-md transition-all"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Signing in...
+                  </>
+                ) : (
+                  'Sign In'
+                )}
+              </Button>
+
+              <div className="flex items-center justify-between text-xs pt-1 gap-4">
+                <span className="text-muted-foreground shrink-0">
+                  Don&apos;t have an account?
+                  <Link href="/signup" className="ml-1.5 font-semibold text-primary hover:underline">
+                    Sign up
+                  </Link>
+                </span>
+                <Link
+                  href="/forgot-password"
+                  className="font-medium text-primary hover:underline transition-all shrink-0"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            </form>
+
+            <div className="relative flex items-center justify-center py-1">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border/40" />
+              </div>
+              <div className="relative bg-background px-3 text-[11px] font-medium text-muted-foreground/80 uppercase tracking-wider">
+                Or continue with
+              </div>
+            </div>
+
             <Script
               src="https://accounts.google.com/gsi/client"
               strategy="afterInteractive"
@@ -224,18 +340,18 @@ export default function HomePage() {
             {isLoading ? (
               <Button
                 variant="outline"
-                className="w-full h-12 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all flex items-center justify-center"
+                className="w-full h-11 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all flex items-center justify-center"
                 disabled
               >
                 <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" />
                 Signing you in...
               </Button>
             ) : (
-              <div className="relative w-full h-12">
+              <div className="relative w-full h-11">
                 {/* Premium Custom Static Button */}
                 <Button
                   variant="outline"
-                  className="w-full h-12 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all flex items-center justify-center gap-3"
+                  className="w-full h-11 text-sm font-medium border-border/60 hover:bg-muted/60 transition-all flex items-center justify-center gap-3"
                 >
                   <svg className="h-5 w-5" viewBox="0 0 24 24">
                     <path

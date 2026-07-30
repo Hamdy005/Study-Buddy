@@ -24,7 +24,18 @@ class Settings:
         os.getenv("SUPABASE_ANON_KEY")
         or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
     )
-    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    cloudinary_cloud_name: str = (
+        os.getenv("CLOUDINARY_CLOUD_NAME")
+        or os.getenv("CLOUD_NAME", "")
+    )
+    cloudinary_api_key: str = (
+        os.getenv("CLOUDINARY_API_KEY")
+        or os.getenv("CLOUD_API_KEY", "")
+    )
+    cloudinary_api_secret: str = (
+        os.getenv("CLOUDINARY_API_SECRET")
+        or os.getenv("CLOUD_SECRET", "")
+    )
     model_name: str = os.getenv("MODEL_NAME", "gemini-3.1-flash-lite")
     transformers_no_tf: str = os.getenv("TRANSFORMERS_NO_TF", "1")
     cors_allowed_origins: list[str] = [

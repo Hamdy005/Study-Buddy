@@ -12,7 +12,6 @@ from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
-from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.config import settings
@@ -164,23 +163,25 @@ def get_quiz_llm():
     )
 
 
-def get_groq_llm():
-    if not settings.groq_api_key:
-        raise ValueError("GROQ_API_KEY not found. Please set it in config.env.")
-    return ChatOpenAI(
-        model="llama-3.1-8b-instant",
-        base_url="https://api.groq.com/openai/v1",
-        api_key=settings.groq_api_key,
-        max_tokens=600,
+def get_gemma_31b_llm():
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
+    logger.info("Initializing primary LLM with model: google/gemma-4-31b-it")
+    return ChatGoogleGenerativeAI(
+        model="google/gemma-4-31b-it",
+        api_key=settings.gemini_api_key,
+        temperature=0.3,
+        max_output_tokens=2500,
+        timeout=120,
     )
 
 
-def get_fallback_gemma_llm():
+def get_gemma_26b_llm():
     if not os.environ.get("GEMINI_API_KEY"):
         raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info("Initializing fallback LLM with model: google/gemma-4-31b-it")
+    logger.info("Initializing fallback LLM with model: google/gemma-4-26b-it")
     return ChatGoogleGenerativeAI(
-        model="google/gemma-4-31b-it",
+        model="google/gemma-4-26b-it",
         api_key=settings.gemini_api_key,
         temperature=0.3,
         max_output_tokens=2500,
@@ -298,8 +299,6 @@ def rag_answer(
 
     is_topic = not (material_id and mat and mat.get("source_type") != "topic")
 
-    llm = get_groq_llm()
-
     context_parts = []
     has_chunks = False
 
@@ -368,9 +367,8 @@ def rag_answer(
         return any(t.startswith(p) for p in _REFUSAL_PREFIXES)
 
     try:
-        # All queries now use the simple LLM call (no agent loop).
-        # DDG results are pre-fetched and injected into context above.
-        chain = prompt | llm
+        primary_llm = get_gemma_31b_llm()
+        chain = prompt | primary_llm
 
         memory_vars = memory.load_memory_variables({"input": query})
         chat_history = memory_vars.get("chat_history", [])
@@ -388,9 +386,9 @@ def rag_answer(
             memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
-        logger.warning(f"Groq API call failed or rate-limited: {e}. Falling back to google/gemma-4-31b-it immediately.")
+        logger.warning(f"Gemma 4 31B API call failed or rate-limited: {e}. Falling back to google/gemma-4-26b-it immediately.")
         try:
-            fallback_llm = get_fallback_gemma_llm()
+            fallback_llm = get_gemma_26b_llm()
             chain = prompt | fallback_llm
             memory_vars = memory.load_memory_variables({"input": query})
             chat_history = memory_vars.get("chat_history", [])
@@ -407,12 +405,10 @@ def rag_answer(
                 memory.save_context({"input": query}, {"output": answer})
             return answer, memory
         except Exception as fallback_err:
-            logger.error(f"Fallback LLM call also failed: {fallback_err}")
+            logger.error(f"Fallback Gemma 4 26B LLM call also failed: {fallback_err}")
             raise fallback_err
 
 def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
-    llm = get_groq_llm()
-    
     topic_context = ""
     if material_title:
         topic_context = f"\nNote: The user is discussing the topic '{material_title}'. If their query uses pronouns like 'its' or 'this', assume it refers to this topic. If the topic name '{material_title}' appears to be a random string or dummy name, do not use it directly; instead, create a general title related to their query, such as 'Types of the topic' or 'Elements of the topic'."
@@ -425,16 +421,17 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     )
     
     try:
-        chain = prompt | llm
+        primary_llm = get_gemma_31b_llm()
+        chain = prompt | primary_llm
         response = chain.invoke({"query": query})
     except Exception as e:
-        logger.warning(f"Groq API call failed or rate-limited in extract_chat_title: {e}. Falling back to google/gemma-4-31b-it immediately.")
+        logger.warning(f"Gemma 4 31B API call failed or rate-limited in extract_chat_title: {e}. Falling back to google/gemma-4-26b-it immediately.")
         try:
-            fallback_llm = get_fallback_gemma_llm()
+            fallback_llm = get_gemma_26b_llm()
             chain = prompt | fallback_llm
             response = chain.invoke({"query": query})
         except Exception as fallback_err:
-            logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
+            logger.error(f"Fallback Gemma 4 26B LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
 
     title = response.content.strip().strip('"').strip("'")
