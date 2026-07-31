@@ -9,12 +9,18 @@ from src.config import settings
 from src.database import get_auth_supabase, get_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
 from src.dependencies import get_current_user_id, get_current_user
-from .schemas import ProfileUpdateRequest
+from .schemas import ProfileUpdateRequest, EmailRateLimitRequest
 from .constants import (
     ALLOWED_MIME_TYPES,
     MAX_FILE_SIZE_BYTES,
     AVATAR_BUCKET,
     PLACEHOLDER_DOMAINS,
+    EMAIL_RATE_LIMITS,
+)
+from .rate_limiter import (
+    enforce_email_rate_limit,
+    get_email_rate_limit_status,
+    check_and_record_email_rate_limit,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
@@ -219,4 +225,30 @@ async def update_profile(body: ProfileUpdateRequest, user_id: str = Depends(get_
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"Failed to update profile: {e}")
+
+
+@router.post("/check-email-rate-limit")
+async def check_email_limit(body: EmailRateLimitRequest):
+    """
+    Enforce in-memory rate limit for email sending actions (3 emails per hour).
+    Action must be one of: 'email_verification', 'forgot_password', or 'change_password_confirmation'.
+    Raises HTTP 429 if limit is reached.
+    """
+    remaining = enforce_email_rate_limit(body.action, body.email)
+    return {
+        "status": "allowed",
+        "action": body.action,
+        "email": body.email,
+        "remaining_attempts": remaining,
+    }
+
+
+@router.get("/email-rate-limit-status")
+async def email_limit_status(action: str, email: str):
+    """
+    Get the status of an email rate limit window without recording a new attempt.
+    """
+    status_info = get_email_rate_limit_status(action, email)
+    return {"status": "success", "action": action, "email": email, **status_info}
+
 

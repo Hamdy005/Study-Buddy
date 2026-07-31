@@ -85,7 +85,7 @@ app = FastAPI(
     title="AI Tutor API",
     description="Backend API for the AI Tutor for Students application",
     version="1.0.0",
-    lifespan=lifespan,
+    # lifespan=lifespan,
 )
 
 @app.middleware("http")

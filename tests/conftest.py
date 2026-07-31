@@ -14,8 +14,20 @@ os.environ["SECRET_KEY"] = os.getenv("SECRET_KEY", "test-secret-key-for-testing-
 
 from src.dependencies import DEV_USER_ID, get_current_user_id
 from src.main import app
+from src.auth.rate_limiter import _store, _cooldowns
 
 pytest_plugins = ["anyio"]
+
+
+# ── Rate Limiter Clean Fixture ──────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def clear_rate_limiter_store():
+    _store.clear()
+    _cooldowns.clear()
+    yield
+    _store.clear()
+    _cooldowns.clear()
 
 
 # ── Backend & session ────────────────────────────────────────────────────────
