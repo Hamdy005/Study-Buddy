@@ -14,12 +14,16 @@ export default function AuthCallbackPage() {
     const handleCallback = async () => {
       const searchParams = new URLSearchParams(window.location.search)
       const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
-      const errorParam = searchParams.get('error') || hashParams.get('error')
+      const errorParam =
+        searchParams.get('error_description') ||
+        hashParams.get('error_description') ||
+        searchParams.get('error') ||
+        hashParams.get('error')
 
       if (errorParam) {
-        console.error('OAuth callback error:', errorParam)
+        console.error('Auth callback error:', errorParam)
         logout()
-        router.replace(`/?error=${errorParam}`)
+        router.replace(`/?error=${encodeURIComponent(errorParam)}`)
         return
       }
 

@@ -2,7 +2,7 @@ import re
 import logging
 import concurrent.futures
 from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
-from src.rag.rag import get_llm
+from src.rag.rag import get_summary_llm, get_summary_fallback_llm
 from .constants import (
     SUMMARIZER_PROMPT_TEMPLATE,
     WEB_SUMMARIZER_PROMPT_TEMPLATE,
@@ -51,21 +51,23 @@ def _truncate_text(text: str, max_chars: int = MAX_INPUT_CHARS) -> str:
 def summarizer(text: str) -> str:
     logger.info(f"Summarizer started for text of length {len(text)}")
     text = _truncate_text(text)
+    prompt = summarizer_prompt()
+
     try:
-        prompt = summarizer_prompt()
-        llm = get_llm()
-        # Modern LCEL syntax
+        llm = get_summary_llm()
         chain = prompt | llm
         response = chain.invoke({"input": text})
-        
-        raw_content = response.content
-        logger.info(f"Summarizer received response of length {len(raw_content)}")
-        logger.debug(f"Raw summary response: {raw_content[:500]}...")
-        
-        return clean_summary(raw_content)
+        return clean_summary(response.content)
     except Exception as e:
-        logger.error(f"Summarizer failed: {str(e)}", exc_info=True)
-        raise
+        logger.warning(f"Primary summary model (gemini-3.5-flash-lite) failed: {e}. Falling back to gemini-3.1-flash-lite.")
+        try:
+            fallback_llm = get_summary_fallback_llm()
+            chain = prompt | fallback_llm
+            response = chain.invoke({"input": text})
+            return clean_summary(response.content)
+        except Exception as fallback_err:
+            logger.error(f"Fallback summary generation failed: {fallback_err}", exc_info=True)
+            raise fallback_err
 
 
 def fetch_web_content(topic: str) -> str:
@@ -133,12 +135,17 @@ def web_summarizer(topic: str, raw_content: str | None = None) -> str:
     combined = _truncate_text(combined)
 
     try:
-        llm = get_llm()
+        llm = get_summary_llm()
         chain = WEB_SUMMARIZER_PROMPT_TEMPLATE | llm
         response = chain.invoke({"topic": topic, "input": combined})
-        raw_resp = response.content
-        logger.info(f"Web summarizer received response of length {len(raw_resp)}")
-        return clean_summary(raw_resp)
+        return clean_summary(response.content)
     except Exception as e:
-        logger.error(f"Web summarizer failed: {str(e)}", exc_info=True)
-        raise
+        logger.warning(f"Primary web summarizer model (gemini-3.5-flash-lite) failed: {e}. Falling back to gemini-3.1-flash-lite.")
+        try:
+            fallback_llm = get_summary_fallback_llm()
+            chain = WEB_SUMMARIZER_PROMPT_TEMPLATE | fallback_llm
+            response = chain.invoke({"topic": topic, "input": combined})
+            return clean_summary(response.content)
+        except Exception as fallback_err:
+            logger.error(f"Fallback web summarizer failed: {fallback_err}", exc_info=True)
+            raise fallback_err

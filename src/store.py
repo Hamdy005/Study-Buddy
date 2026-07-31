@@ -294,9 +294,10 @@ def delete_material(material_id: str):
 # ── Material Chunks ────────────────────────────────────
 
 def save_chunks(material_id: str, chunks: list[str]) -> list[str]:
+    cleaned_chunks = [c.replace("\x00", "").replace("\u0000", "") for c in chunks if c]
     records = [
         {"material_id": material_id, "chunk_index": i, "content": c}
-        for i, c in enumerate(chunks)
+        for i, c in enumerate(cleaned_chunks)
     ]
     result = _robust_execute(_table_supabase("material_chunks").insert(records))
     return [r["id"] for r in result.data]

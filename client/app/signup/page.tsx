@@ -65,10 +65,12 @@ export default function SignUpPage() {
 
     setIsLoading(true)
     try {
+      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : undefined
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
         options: {
+          emailRedirectTo: redirectTo,
           data: {
             name: name.trim(),
             full_name: name.trim(),

@@ -13,6 +13,7 @@ from langchain.memory import ConversationBufferMemory, ConversationBufferWindowM
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 from src.config import settings
 from src.database import get_supabase
@@ -136,33 +137,83 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
 # ── LLM ────────────────────────────────────────────────
 
 def get_llm():
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info(f"Initializing LLM with model: {settings.model_name}")
-    return ChatGoogleGenerativeAI(
-        model=settings.model_name,
-        api_key=settings.gemini_api_key,
+    """RAG Chatbot LLM — strictly uses Groq llama-3.1-8b-instant."""
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY is not configured in config.env. Required for Llama 3.1 RAG chatbot.")
+    logger.info("Initializing RAG Chatbot LLM with Groq model: llama-3.1-8b-instant")
+    return ChatGroq(
+        model="llama-3.1-8b-instant",
+        api_key=groq_key,
         temperature=0.3,
-        max_output_tokens=2500,
+        max_tokens=2500,
         timeout=120,
     )
 
 
-def get_quiz_llm():
-    """Dedicated LLM instance for quiz generation with a high output token budget.
-    Large quizzes (40 MCQs + 20 T/F) can produce 8000-12000 tokens of JSON,
-    so we cannot reuse the chat LLM which is capped at 2000 tokens.
-    """
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info(f"Initializing Quiz LLM with model: {settings.model_name}")
+def get_summary_llm():
+    """Primary Summary Generator LLM using gemini-3.5-flash-lite."""
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY not found in config.env.")
+    logger.info("Initializing Summary LLM with model: gemini-3.5-flash-lite")
     return ChatGoogleGenerativeAI(
-        model=settings.model_name,
-        api_key=settings.gemini_api_key,
+        model="gemini-3.5-flash-lite",
+        api_key=gemini_key,
+        temperature=0.3,
+        max_output_tokens=4000,
+        timeout=180,
+    )
+
+
+def get_summary_fallback_llm():
+    """Fallback Summary Generator LLM using gemini-3.1-flash-lite."""
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY not found in config.env.")
+    logger.info("Initializing Fallback Summary LLM with model: gemini-3.1-flash-lite")
+    return ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite",
+        api_key=gemini_key,
+        temperature=0.3,
+        max_output_tokens=4000,
+        timeout=180,
+    )
+
+
+def get_quiz_llm():
+    """Primary Quiz Generator LLM using gemini-3.5-flash-lite."""
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY not found in config.env.")
+    logger.info("Initializing Quiz LLM with model: gemini-3.5-flash-lite")
+    return ChatGoogleGenerativeAI(
+        model="gemini-3.5-flash-lite",
+        api_key=gemini_key,
         temperature=0.3,
         max_output_tokens=12000,
         timeout=300,
     )
+
+
+def get_quiz_fallback_llm():
+    """Fallback Quiz Generator LLM using gemini-3.1-flash-lite."""
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY not found in config.env.")
+    logger.info("Initializing Fallback Quiz LLM with model: gemini-3.1-flash-lite")
+    return ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite",
+        api_key=gemini_key,
+        temperature=0.3,
+        max_output_tokens=12000,
+        timeout=300,
+    )
+
+
+def get_fallback_llm():
+    """Fallback LLM using Gemini 3.1 Flash Lite."""
+    return get_summary_fallback_llm()
 
 
 def _clean_llm_response(content) -> str:
@@ -180,32 +231,6 @@ def _clean_llm_response(content) -> str:
                     texts.append(part.get("text", ""))
         return "\n".join(t for t in texts if t)
     return str(content)
-
-
-def get_gemma_31b_llm():
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info("Initializing primary LLM with model: gemma-4-31b-it")
-    return ChatGoogleGenerativeAI(
-        model="gemma-4-31b-it",
-        api_key=settings.gemini_api_key,
-        temperature=0.3,
-        max_output_tokens=2500,
-        timeout=120,
-    )
-
-
-def get_gemma_26b_llm():
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info("Initializing fallback LLM with model: gemma-4-26b-a4b-it")
-    return ChatGoogleGenerativeAI(
-        model="gemma-4-26b-a4b-it",
-        api_key=settings.gemini_api_key,
-        temperature=0.3,
-        max_output_tokens=2500,
-        timeout=120,
-    )
 
 
 # ── Web Search Helpers ────────────────────────────────
@@ -386,7 +411,7 @@ def rag_answer(
         return any(t.startswith(p) for p in _REFUSAL_PREFIXES)
 
     try:
-        primary_llm = get_gemma_26b_llm()
+        primary_llm = get_llm()
         chain = prompt | primary_llm
 
         memory_vars = memory.load_memory_variables({"input": query})
@@ -405,9 +430,9 @@ def rag_answer(
             memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
-        logger.warning(f"Gemma 4 26B API call failed or rate-limited: {e}. Falling back to gemma-4-31b-it immediately.")
+        logger.warning(f"Primary LLM call failed or rate-limited: {e}. Falling back to secondary LLM.")
         try:
-            fallback_llm = get_gemma_31b_llm()
+            fallback_llm = get_fallback_llm()
             chain = prompt | fallback_llm
             memory_vars = memory.load_memory_variables({"input": query})
             chat_history = memory_vars.get("chat_history", [])
@@ -424,7 +449,7 @@ def rag_answer(
                 memory.save_context({"input": query}, {"output": answer})
             return answer, memory
         except Exception as fallback_err:
-            logger.error(f"Fallback Gemma 4 31B LLM call also failed: {fallback_err}")
+            logger.error(f"Fallback LLM call also failed: {fallback_err}")
             raise fallback_err
 
 def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
@@ -440,17 +465,17 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     )
     
     try:
-        primary_llm = get_gemma_26b_llm()
+        primary_llm = get_llm()
         chain = prompt | primary_llm
         response = chain.invoke({"query": query})
     except Exception as e:
-        logger.warning(f"Gemma 4 26B API call failed or rate-limited in extract_chat_title: {e}. Falling back to gemma-4-31b-it immediately.")
+        logger.warning(f"Primary LLM call failed in extract_chat_title: {e}. Falling back to secondary LLM.")
         try:
-            fallback_llm = get_gemma_31b_llm()
+            fallback_llm = get_fallback_llm()
             chain = prompt | fallback_llm
             response = chain.invoke({"query": query})
         except Exception as fallback_err:
-            logger.error(f"Fallback Gemma 4 31B LLM call also failed in extract_chat_title: {fallback_err}")
+            logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
 
     title = _clean_llm_response(response.content).strip().strip('"').strip("'")

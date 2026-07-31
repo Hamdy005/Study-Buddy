@@ -47,6 +47,10 @@ root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
+# Suppress noisy watchfiles reload logs
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,7 +89,7 @@ app = FastAPI(
     title="AI Tutor API",
     description="Backend API for the AI Tutor for Students application",
     version="1.0.0",
-    # lifespan=lifespan,
+    lifespan=lifespan,
 )
 
 @app.middleware("http")

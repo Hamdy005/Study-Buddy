@@ -50,6 +50,7 @@ export default function HomePage() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const { user, isLoading: isAuthLoading, logout } = useAuth()
   const router = useRouter()
   const { resolvedTheme } = useTheme()
@@ -62,6 +63,7 @@ export default function HomePage() {
       return
     }
     setIsSubmitting(true)
+    setErrorMessage(null)
     try {
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
@@ -83,10 +85,25 @@ export default function HomePage() {
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
     const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
-    if (searchParams.has('error') || hashParams.has('error')) {
+    const rawError =
+      searchParams.get('error_description') ||
+      hashParams.get('error_description') ||
+      searchParams.get('error') ||
+      hashParams.get('error')
+
+    if (rawError) {
       if (user) {
         logout()
       }
+      const decoded = decodeURIComponent(rawError.replace(/\+/g, ' '))
+      if (decoded === 'oauth_failed') {
+        setErrorMessage('Google sign-in failed. Please try signing in again.')
+      } else {
+        setErrorMessage(decoded)
+      }
+      try {
+        window.history.replaceState({}, document.title, window.location.pathname)
+      } catch {}
       return
     }
 
@@ -97,6 +114,7 @@ export default function HomePage() {
 
   const handleCredentialResponse = useCallback(async (response: any) => {
     setIsLoading(true)
+    setErrorMessage(null)
     try {
       const { error } = await supabase.auth.signInWithIdToken({
         provider: 'google',
@@ -154,12 +172,7 @@ export default function HomePage() {
     return () => clearTimeout(timer)
   }, [isAuthLoading, isLoading, initGoogleSignIn])
 
-  const hasError = typeof window !== 'undefined' && (
-    new URLSearchParams(window.location.search).has('error') ||
-    new URLSearchParams(window.location.hash.replace('#', '?')).has('error')
-  )
-
-  if (isAuthLoading || (user && !hasError)) {
+  if (isAuthLoading || (user && !errorMessage)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -240,9 +253,9 @@ export default function HomePage() {
             </p>
           </div>
 
-          {hasError && (
+          {errorMessage && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
-              Sign In Failed, Try Signing In Again
+              {errorMessage}
             </div>
           )}
 

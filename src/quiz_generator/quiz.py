@@ -6,7 +6,7 @@ from typing import Optional
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.tools import create_retriever_tool
 
-from src.rag.rag import get_quiz_llm, SupabaseRetriever
+from src.rag.rag import get_quiz_llm, get_quiz_fallback_llm, SupabaseRetriever
 from .constants import (
     QUIZ_PROMPT_TEMPLATE,
     WEB_QUIZ_PROMPT_TEMPLATE,
@@ -58,11 +58,11 @@ def smart_quiz_generator(
 
 def _summary_quiz(difficulty, mcq_count, tf_count, context_text):
     logger.info(f"Summary Quiz started (diff={difficulty}, mcq={mcq_count}, tf={tf_count})")
+    prompt = _quiz_prompt()
+    safe_context = context_text
+
     try:
-        prompt = _quiz_prompt()
         llm = get_quiz_llm()
-        safe_context = context_text
-        
         chain = prompt | llm
         response = chain.invoke({
             "difficulty": difficulty,
@@ -72,30 +72,39 @@ def _summary_quiz(difficulty, mcq_count, tf_count, context_text):
             "context": safe_context,
             "agent_scratchpad": "",
         })
-        
-        raw_content = response.content
-        logger.info(f"Summary Quiz received response of length {len(raw_content)}")
-        
-        # response is a message object, content is the text
-        return _parse_quiz({"output": raw_content})
+        return _parse_quiz({"output": response.content})
     except Exception as e:
-        logger.error(f"Summary Quiz failed: {str(e)}", exc_info=True)
-        raise
+        logger.warning(f"Primary Quiz LLM (gemini-3.5-flash-lite) failed: {e}. Falling back to gemini-3.1-flash-lite.")
+        try:
+            fallback_llm = get_quiz_fallback_llm()
+            chain = prompt | fallback_llm
+            response = chain.invoke({
+                "difficulty": difficulty,
+                "mcq_count": mcq_count,
+                "tf_count": tf_count,
+                "source_type": "summary",
+                "context": safe_context,
+                "agent_scratchpad": "",
+            })
+            return _parse_quiz({"output": response.content})
+        except Exception as fallback_err:
+            logger.error(f"Fallback Quiz generation failed: {fallback_err}", exc_info=True)
+            raise fallback_err
 
 
 def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
     logger.info(f"Contextual Quiz started (material_id={material_id}, diff={difficulty})")
+    prompt = _quiz_prompt()
+    retriever = SupabaseRetriever(material_id=material_id, k=RETRIEVER_K)
+    retriever_tool = create_retriever_tool(
+        retriever,
+        name="quiz_material_retriever",
+        description="Retrieves relevant content from uploaded materials for quiz generation.",
+    )
+    safe_context = context or ""
+
     try:
-        prompt = _quiz_prompt()
         llm = get_quiz_llm()
-
-        retriever = SupabaseRetriever(material_id=material_id, k=RETRIEVER_K)
-        retriever_tool = create_retriever_tool(
-            retriever,
-            name="quiz_material_retriever",
-            description="Retrieves relevant content from uploaded materials for quiz generation.",
-        )
-
         agent = create_tool_calling_agent(llm, [retriever_tool], prompt)
         executor = AgentExecutor(
             agent=agent,
@@ -106,8 +115,6 @@ def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
             max_iterations=80,
             max_execution_time=300,
         )
-
-        safe_context = context or ""
         response = executor.invoke({
             "difficulty": difficulty,
             "source_type": "Document Embeddings",
@@ -116,57 +123,78 @@ def _contextual_quiz(difficulty, mcq_count, tf_count, context, material_id):
             "agent_scratchpad": "",
             "context": safe_context,
         })
-        logger.info("Contextual Quiz agent finished successfully")
         return _parse_quiz(response)
     except Exception as e:
-        logger.error(f"Contextual Quiz failed: {str(e)}", exc_info=True)
-        raise
+        logger.warning(f"Primary Contextual Quiz agent failed: {e}. Falling back to gemini-3.1-flash-lite.")
+        try:
+            fallback_llm = get_quiz_fallback_llm()
+            agent = create_tool_calling_agent(fallback_llm, [retriever_tool], prompt)
+            executor = AgentExecutor(
+                agent=agent,
+                tools=[retriever_tool],
+                verbose=False,
+                return_intermediate_steps=False,
+                handle_parsing_errors=True,
+                max_iterations=80,
+                max_execution_time=300,
+            )
+            response = executor.invoke({
+                "difficulty": difficulty,
+                "source_type": "Document Embeddings",
+                "mcq_count": mcq_count,
+                "tf_count": tf_count,
+                "agent_scratchpad": "",
+                "context": safe_context,
+            })
+            return _parse_quiz(response)
+        except Exception as fallback_err:
+            logger.error(f"Fallback Contextual Quiz failed: {fallback_err}", exc_info=True)
+            raise fallback_err
 
 
 def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
     logger.info(f"Web Quiz started (topic={topic_title}, diff={difficulty})")
+    import concurrent.futures
+    from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
+
+    def fetch_wikipedia():
+        try:
+            wiki_api = WikipediaAPIWrapper(
+                top_k_results=WIKI_TOP_K_RESULTS,
+                doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
+            )
+            return wiki_api.run(topic_title)
+        except Exception as e:
+            logger.warning(f"Wikipedia search for '{topic_title}' failed: {e}")
+            return ""
+
+    def fetch_duckduckgo():
+        try:
+            duck_api = DuckDuckGoSearchAPIWrapper()
+            return duck_api.run(topic_title)
+        except Exception as e:
+            logger.warning(f"DuckDuckGo search for '{topic_title}' failed: {e}")
+            return ""
+
+    # Fetch in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        wiki_future = executor.submit(fetch_wikipedia)
+        duck_future = executor.submit(fetch_duckduckgo)
+
+        wiki_content = wiki_future.result()
+        duck_content = duck_future.result()
+
+    all_content = []
+    if wiki_content and wiki_content.strip():
+        all_content.append(f"--- Wikipedia ---\n{wiki_content}")
+    if duck_content and duck_content.strip():
+        all_content.append(f"--- Web Search ---\n{duck_content}")
+
+    combined_context = "\n\n".join(all_content) if all_content else f"No web content found for: {topic_title}"
+    prompt = WEB_QUIZ_PROMPT_TEMPLATE
+
     try:
-        import concurrent.futures
-        from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
-
-        def fetch_wikipedia():
-            try:
-                wiki_api = WikipediaAPIWrapper(
-                    top_k_results=WIKI_TOP_K_RESULTS,
-                    doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
-                )
-                return wiki_api.run(topic_title)
-            except Exception as e:
-                logger.warning(f"Wikipedia search for '{topic_title}' failed: {e}")
-                return ""
-
-        def fetch_duckduckgo():
-            try:
-                duck_api = DuckDuckGoSearchAPIWrapper()
-                return duck_api.run(topic_title)
-            except Exception as e:
-                logger.warning(f"DuckDuckGo search for '{topic_title}' failed: {e}")
-                return ""
-
-        # Fetch in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            wiki_future = executor.submit(fetch_wikipedia)
-            duck_future = executor.submit(fetch_duckduckgo)
-
-            wiki_content = wiki_future.result()
-            duck_content = duck_future.result()
-
-        all_content = []
-        if wiki_content and wiki_content.strip():
-            all_content.append(f"--- Wikipedia ---\n{wiki_content}")
-        if duck_content and duck_content.strip():
-            all_content.append(f"--- Web Search ---\n{duck_content}")
-
-        combined_context = "\n\n".join(all_content) if all_content else f"No web content found for: {topic_title}"
-
-        prompt = WEB_QUIZ_PROMPT_TEMPLATE
         llm = get_quiz_llm()
-
         chain = prompt | llm
         response = chain.invoke({
             "topic": topic_title,
@@ -177,13 +205,25 @@ def _web_quiz(difficulty, mcq_count, tf_count, topic_title):
             "source_type": "Web Search",
             "agent_scratchpad": "",
         })
-
-        raw_content = response.content
-        logger.info("Web Quiz chain finished successfully")
-        return _parse_quiz({"output": raw_content})
+        return _parse_quiz({"output": response.content})
     except Exception as e:
-        logger.error(f"Web Quiz failed: {str(e)}", exc_info=True)
-        raise
+        logger.warning(f"Primary Web Quiz model failed: {e}. Falling back to gemini-3.1-flash-lite.")
+        try:
+            fallback_llm = get_quiz_fallback_llm()
+            chain = prompt | fallback_llm
+            response = chain.invoke({
+                "topic": topic_title,
+                "context": combined_context,
+                "difficulty": difficulty,
+                "mcq_count": mcq_count,
+                "tf_count": tf_count,
+                "source_type": "Web Search",
+                "agent_scratchpad": "",
+            })
+            return _parse_quiz({"output": response.content})
+        except Exception as fallback_err:
+            logger.error(f"Fallback Web Quiz failed: {fallback_err}", exc_info=True)
+            raise fallback_err
 
 
 def _parse_quiz(response):
