@@ -386,7 +386,7 @@ def rag_answer(
         return any(t.startswith(p) for p in _REFUSAL_PREFIXES)
 
     try:
-        primary_llm = get_gemma_31b_llm()
+        primary_llm = get_gemma_26b_llm()
         chain = prompt | primary_llm
 
         memory_vars = memory.load_memory_variables({"input": query})
@@ -405,9 +405,9 @@ def rag_answer(
             memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
-        logger.warning(f"Gemma 4 31B API call failed or rate-limited: {e}. Falling back to gemma-4-26b-a4b-it immediately.")
+        logger.warning(f"Gemma 4 26B API call failed or rate-limited: {e}. Falling back to gemma-4-31b-it immediately.")
         try:
-            fallback_llm = get_gemma_26b_llm()
+            fallback_llm = get_gemma_31b_llm()
             chain = prompt | fallback_llm
             memory_vars = memory.load_memory_variables({"input": query})
             chat_history = memory_vars.get("chat_history", [])
@@ -424,7 +424,7 @@ def rag_answer(
                 memory.save_context({"input": query}, {"output": answer})
             return answer, memory
         except Exception as fallback_err:
-            logger.error(f"Fallback Gemma 4 26B LLM call also failed: {fallback_err}")
+            logger.error(f"Fallback Gemma 4 31B LLM call also failed: {fallback_err}")
             raise fallback_err
 
 def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
@@ -440,17 +440,17 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     )
     
     try:
-        primary_llm = get_gemma_31b_llm()
+        primary_llm = get_gemma_26b_llm()
         chain = prompt | primary_llm
         response = chain.invoke({"query": query})
     except Exception as e:
-        logger.warning(f"Gemma 4 31B API call failed or rate-limited in extract_chat_title: {e}. Falling back to gemma-4-26b-a4b-it immediately.")
+        logger.warning(f"Gemma 4 26B API call failed or rate-limited in extract_chat_title: {e}. Falling back to gemma-4-31b-it immediately.")
         try:
-            fallback_llm = get_gemma_26b_llm()
+            fallback_llm = get_gemma_31b_llm()
             chain = prompt | fallback_llm
             response = chain.invoke({"query": query})
         except Exception as fallback_err:
-            logger.error(f"Fallback Gemma 4 26B LLM call also failed in extract_chat_title: {fallback_err}")
+            logger.error(f"Fallback Gemma 4 31B LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
 
     title = _clean_llm_response(response.content).strip().strip('"').strip("'")

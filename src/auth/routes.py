@@ -80,8 +80,18 @@ async def upload_avatar(
 
 @router.delete("/me")
 async def delete_account(user_id: str = Depends(get_current_user_id)):
+    # 1. Delete all DB data (materials, quizzes, profile, etc.)
     delete_user_data(user_id)
-    return {"status": "success", "message": "Account data deleted"}
+
+    # 2. Delete the Supabase Auth user so they can't sign in again
+    admin_client = get_supabase()
+    if admin_client:
+        try:
+            admin_client.auth.admin.delete_user(user_id)
+        except Exception as e:
+            raise HTTPException(500, f"Account data deleted but failed to remove auth user: {e}")
+
+    return {"status": "success", "message": "Account deleted successfully"}
 
 
 @router.get("/profile")

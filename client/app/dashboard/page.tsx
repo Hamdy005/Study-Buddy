@@ -215,6 +215,15 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
+    // If there's no token yet, clear the loading spinner and wait.
+    // The effect will re-run once the real JWT arrives from auth context.
+    if (!token) {
+      setIsLoadingMaterials(false)
+      prevTokenRef.current = null
+      return
+    }
+
+    // Skip if the token hasn't actually changed (prevents duplicate fetches)
     if (token === prevTokenRef.current) return
     prevTokenRef.current = token
 

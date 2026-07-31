@@ -69,28 +69,53 @@ function buildHeaders(token: string | null): HeadersInit {
 }
 
 // Force a full sign-out when the refresh token is expired or invalid.
+// Debounced so concurrent 401s from multiple in-flight requests don't
+// each trigger a separate sign-out cascade.
+let _forceSignOutTimer: ReturnType<typeof setTimeout> | null = null
 function forceSignOut() {
   if (typeof window === 'undefined') return
-  localStorage.removeItem('auth_token')
-  localStorage.removeItem('auth_user')
-  localStorage.removeItem('usage_cache')
-  localStorage.removeItem('cached_materials')
-  supabase.auth.signOut().catch(() => {})
+  if (_forceSignOutTimer) return // already scheduled
+  _forceSignOutTimer = setTimeout(() => {
+    _forceSignOutTimer = null
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('auth_user')
+    localStorage.removeItem('usage_cache')
+    localStorage.removeItem('cached_materials')
+    supabase.auth.signOut().catch(() => {})
+  }, 100)
 }
+
+// ── Refresh lock ─────────────────────────────────────────────────────────────
+// Multiple concurrent API calls can each receive 401 at roughly the same time.
+// Without a lock, each one calls refreshSession() independently — the first
+// succeeds but the second might race or fail, triggering forceSignOut.
+// This lock ensures only ONE refresh attempt runs; all other 401-handlers
+// wait for the same promise.
+let _refreshPromise: Promise<string | null> | null = null
 
 /** Attempt to refresh the Supabase session and return the new access token, or null. */
 async function refreshToken(): Promise<string | null> {
-  try {
-    const { data, error } = await supabase.auth.refreshSession()
-    if (error || !data.session) return null
-    const newToken = data.session.access_token
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('auth_token', newToken)
+  if (_refreshPromise) return _refreshPromise
+
+  _refreshPromise = (async () => {
+    try {
+      const { data, error } = await supabase.auth.refreshSession()
+      if (error || !data.session) return null
+      const newToken = data.session.access_token
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', newToken)
+      }
+      return newToken
+    } catch {
+      return null
+    } finally {
+      // Clear lock after a short delay so closely-spaced calls still share
+      // the result, but future calls (e.g. minutes later) get a fresh attempt.
+      setTimeout(() => { _refreshPromise = null }, 2000)
     }
-    return newToken
-  } catch {
-    return null
-  }
+  })()
+
+  return _refreshPromise
 }
 
 async function fetchAPI<T>(
@@ -98,6 +123,12 @@ async function fetchAPI<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+
+  // Don't even fire a network request without a token — just throw so the
+  // caller can handle it gracefully (e.g. wait for auth to finish).
+  if (!token) {
+    throw new Error('Not authenticated')
+  }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
