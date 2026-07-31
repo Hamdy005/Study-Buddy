@@ -8,84 +8,84 @@
 </p>
 
 --- 
-Study Buddy is a Next.js AI tutor powered by FastAPI and Supabase. Upload PDFs and URLs to generate structured summaries, multi-session chat, and custom quizzes. Custom topics use web search through Wikipedia, ArXiv, and DuckDuckGo.
+Study Buddy is an intelligent Next.js AI study assistant powered by FastAPI, Supabase, Cloudinary, and Resend. Upload PDFs, audio files, or web URLs to generate structured summaries, multi-session contextual chat, and custom quizzes. For custom study topics, Study Buddy leverages web search engines (Wikipedia & DuckDuckGo).
 
 ---
 
 ## 🏗️ Architecture Overview
 
 ### 🌐 Frontend — Next.js
-
-The UI is built with **Next.js** and deployed on **Vercel**, served under a custom domain. It supports **light and dark mode**: the default follows the **system preference**, and the user can override it with a manual toggle.
+The UI is built with **Next.js 15 (App Router)**. It supports **light and dark mode** (auto-detecting system preference with manual toggle override).
 
 ### ⚡ Backend — FastAPI
+The AI engine runs on **FastAPI**, handling embedding generation, document processing, ASR audio transcription, multi-session RAG chat, summarization, and quiz generation.
 
-The AI engine runs on a **FastAPI** backend, handling embeddings, summarization, chat, and quiz generation.
+### 🗄️ Database & Vector Store — Supabase
+**Supabase** serves as the central PostgreSQL database and vector store (`pgvector`). All user accounts, materials, chunks, chat histories, summaries, and quizzes are securely stored.
 
-### 🗄️ Database — Supabase
+### ☁️ Cloud Storage — Cloudinary
+Uploaded PDF files and media assets are hosted on **Cloudinary**, providing scalable file storage and high-speed CDN delivery for PDF preview rendering.
 
-**Supabase** serves as the central database and vector store. All user data is persisted:
+### 📧 Email Service — Resend
+Custom authentication workflows (email verification links, password reset tokens) are powered by **Resend** for reliable transactional email delivery.
 
 ---
 
-## ✨ Frontend Features
+## ✨ Features
 
-You can upload a **PDF**, provide a **URL**, or enter a **custom topic** — the system generates embeddings (for PDFs and URLs) or uses web search (for custom topics) to power all the features below.
+### 🔐 Authentication & Account Management
+- **Google OAuth**: One-click login via Google Identity Services.
+- **Custom Email / Password**: Sign up and sign in with email verification powered by **Resend**.
+- **Password Reset**: Secure email-based password recovery flow with token validation.
+- **Account Deletion**: Full self-service account removal with cascade cleanup of user data, uploaded materials, and chat histories.
+
+### 📁 Material Uploads & Data Processing
+- **PDF Uploads**: Processed, text-sanitized, chunked, and stored in Supabase with original file assets hosted on **Cloudinary**.
+- **Audio Files & ASR**: Speech-to-Text transcription powered by **NeMo Toolkit ASR** (English & Arabic models).
+- **Web URLs & Custom Topics**: Live content retrieval via Wikipedia & DuckDuckGo search APIs.
 
 ### 📝 Summary Generator
+- Generates structured, high-clarity document summaries organized into visual subtopic cards.
+- Powered by **Gemini 3.5 Flash Lite** (fallback to **Gemini 3.1 Flash Lite**).
+- Exportable to PDF.
 
-After generation, the summary is displayed as a **well-structured document** with **sub-header boxes** — each subtopic is stored in its own card for easy reading. Summaries can also be **exported**.
-
-### 💬 Chat (Multi-Session)
-
-- Users can create **multiple chat sessions**, each with its own context.
-- Every chat session is **stored in the database** so it can be retrieved or revisited later.
-- Chats are **exportable** in a pdf.
+### 💬 Multi-Session RAG Chatbot
+- Powered by Groq's high-speed **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`).
+- Multi-session conversation management with persistent chat history.
+- Context-aware RAG querying over uploaded PDF/URL chunks.
+- Auto-generated chat titles based on session context.
+- Exportable chat transcripts.
 
 ### 🧪 Quiz Generator
-
-- Supports **True/False** and **MCQ** questions.
-- Users can choose **any custom number of questions**.
-- Quizzes are rendered in a **clean, good-looking UI** and can be **exported**.
-
----
-
-## 🔐 Authentication
-
-**Google OAuth** is used for all authentication — no custom passwords, usernames, or sign-up forms.
+- Generates **Multiple Choice (MCQ)** and **True/False** questions.
+- Powered by **Gemini 3.5 Flash Lite** with a 12,000 output token limit (fallback to **Gemini 3.1 Flash Lite**).
+- Customizable difficulty levels and question counts.
+- Interactive quiz interface with immediate scoring and PDF export.
 
 ---
 
-## 🧠 AI & Backend Details
+## 🧠 AI Models & Infrastructure
 
-### Embedding Pipeline
-
-- Uses a **multilingual embedder** for cross-language support.
-- When a material is uploaded, the system **processes it and generates embeddings asynchronously**, allowing **concurrent embedding of multiple materials** in parallel rather than sequentially.
-- A **warm-up cycle** keeps the embedder active — ML models become idle without a forward pass for extended periods, so periodic warm-up prevents cold starts.
-
-### Summary & Quiz Generation
-
-- Uses **OpenRouter's API key** to generate summaries and quizzes based on material embeddings.
-- If a **custom topic** is uploaded (instead of a PDF or URL), the topic text itself is used directly for generation.
-
-### Chatbot
-
-- Uses **Gemma 4 31B** (`gemma-4-31b-it`) as primary model via Google Gemini API, with automatic fallback to **Gemma 4 26B** (`gemma-4-26b-a4b-it`) on rate limit.
-- For **PDF and URL materials**, the chatbot replies using the stored **embeddings**.
-- Each chat session gets an **auto-generated title** based on the first user message.
-- For **custom topic** materials (no PDF/URL), the chatbot falls back to **web search tools** — **Wikipedia, ArXiv, and DuckDuckGo Search** — to retrieve relevant information.
-
-### Rate Limits
-
-- **Summary & Quiz generation** — 20 requests per day per user (uses Google Gemini API).
-- **Chatbot** — Powered by Google Gemini API (`gemma-4-31b-it` & `gemma-4-26b-a4b-it`).
+| Component | Provider / Technology | Details |
+|-----------|------------------------|---------|
+| **Frontend** | Next.js 15 + React | Vercel Deployment |
+| **Backend** | FastAPI (Python 3.12/3.10) | Async API Architecture |
+| **Database & Vector Store** | Supabase | PostgreSQL + `pgvector` |
+| **Cloud Asset Storage** | Cloudinary | CDN-hosted PDF & media uploads |
+| **Transactional Email** | Resend | Signup verification & password reset |
+| **RAG Chatbot Model** | Groq (`llama-3.1-8b-instant`) | High-speed LLM inference |
+| **Summary Model** | Google Gemini (`gemini-3.5-flash-lite`) | Fallback: `gemini-3.1-flash-lite` |
+| **Quiz Model** | Google Gemini (`gemini-3.5-flash-lite`) | Fallback: `gemini-3.1-flash-lite` |
+| **Text Embeddings** | HuggingFace / SentenceTransformers | `paraphrase-multilingual-MiniLM-L12-v2` |
+| **Speech Recognition (ASR)** | NVIDIA NeMo Toolkit | English & Arabic ASR models |
+| **Authentication** | Google OAuth & Custom Auth | Google Identity Services + Resend Email |
+| **Web Search Tools** | Wikipedia & DuckDuckGo APIs | Fallback search for topic materials |
 
 ---
 
 ## 📸 Screenshots
 
-### 🔑 Google Sign-In
+### 🔑 Google Sign-In & Email Authentication
 <p align="center">
   <img src="https://github.com/user-attachments/assets/df7a002f-eabe-41e8-b0d3-9a51c7ba5b94" alt="Google Sign-In" width="800"/>
 </p>
@@ -123,18 +123,3 @@ After generation, the summary is displayed as a **well-structured document** wit
 <p align="center">
   <img src="https://github.com/user-attachments/assets/dcc2659f-da33-4e7a-9c36-6d31b0ef3200" alt="Export Quiz as PDF" width="800"/>
 </p>
-
----
-
-## 🔧 Tools & Technologies
-
-| Component | Technology |
-|-----------|------------|
-| Frontend | Next.js (Vercel + custom domain) |
-| Backend | FastAPI (Python) |
-| Database & Vector Store | Supabase |
-| Summary & Quiz Model | `gemini-3.1-flash-lite` via Google Gemini API |
-| Chatbot Model | `gemma-4-31b-it` (fallback: `gemma-4-26b-a4b-it`) via Gemini API |
-| Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
-| Auth | Google OAuth |
-| Web Search | Wikipedia, ArXiv, DuckDuckGo |
