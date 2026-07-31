@@ -25,6 +25,8 @@ from .constants import (
     WIKI_DOC_CONTENT_CHARS_MAX,
     DUCKDUCKGO_NUM_RESULTS,
     DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
+    MEMORY_WINDOW_SIZE,
+    TOP_K_CHUNKS,
 )
 from .schemas import EmbeddingJob
 
@@ -163,12 +165,29 @@ def get_quiz_llm():
     )
 
 
+def _clean_llm_response(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                if part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+                elif "text" in part and part.get("type") != "thinking":
+                    texts.append(part.get("text", ""))
+        return "\n".join(t for t in texts if t)
+    return str(content)
+
+
 def get_gemma_31b_llm():
     if not os.environ.get("GEMINI_API_KEY"):
         raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info("Initializing primary LLM with model: google/gemma-4-31b-it")
+    logger.info("Initializing primary LLM with model: gemma-4-31b-it")
     return ChatGoogleGenerativeAI(
-        model="google/gemma-4-31b-it",
+        model="gemma-4-31b-it",
         api_key=settings.gemini_api_key,
         temperature=0.3,
         max_output_tokens=2500,
@@ -179,9 +198,9 @@ def get_gemma_31b_llm():
 def get_gemma_26b_llm():
     if not os.environ.get("GEMINI_API_KEY"):
         raise ValueError("GEMINI_API_KEY not found. Please set it in config.env.")
-    logger.info("Initializing fallback LLM with model: google/gemma-4-26b-it")
+    logger.info("Initializing fallback LLM with model: gemma-4-26b-a4b-it")
     return ChatGoogleGenerativeAI(
-        model="google/gemma-4-26b-it",
+        model="gemma-4-26b-a4b-it",
         api_key=settings.gemini_api_key,
         temperature=0.3,
         max_output_tokens=2500,
@@ -228,7 +247,7 @@ def direct_wiki_search(query: str) -> str:
 
 class SupabaseRetriever(BaseRetriever):
     material_id: str
-    k: int = 4
+    k: int = TOP_K_CHUNKS
 
     def _get_relevant_documents(self, query: str) -> list[Document]:
         results = similarity_search(query, self.material_id, self.k)
@@ -289,7 +308,7 @@ def rag_answer(
 ):
     if memory is None:
         memory = ConversationBufferWindowMemory(
-            input_key="input", memory_key="chat_history", return_messages=True, k=5
+            input_key="input", memory_key="chat_history", return_messages=True, k=MEMORY_WINDOW_SIZE
         )
 
     # Fetch material info if material_id is provided
@@ -308,7 +327,7 @@ def rag_answer(
 
     if not is_topic:
         # --- Material-based query (PDF/URL): vector similarity search ---
-        results = similarity_search(query, material_id, k=4)
+        results = similarity_search(query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
             chunks = [r["content"] for r in results]
@@ -380,13 +399,13 @@ def rag_answer(
             "agent_scratchpad": "",
         })
 
-        answer = response.content
+        answer = _clean_llm_response(response.content)
         # Only persist non-refusal answers to memory
         if not _is_refusal(answer):
             memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
-        logger.warning(f"Gemma 4 31B API call failed or rate-limited: {e}. Falling back to google/gemma-4-26b-it immediately.")
+        logger.warning(f"Gemma 4 31B API call failed or rate-limited: {e}. Falling back to gemma-4-26b-a4b-it immediately.")
         try:
             fallback_llm = get_gemma_26b_llm()
             chain = prompt | fallback_llm
@@ -399,7 +418,7 @@ def rag_answer(
                 "chat_history": chat_history,
                 "agent_scratchpad": "",
             })
-            answer = response.content
+            answer = _clean_llm_response(response.content)
             # Only persist non-refusal answers to memory
             if not _is_refusal(answer):
                 memory.save_context({"input": query}, {"output": answer})
@@ -425,7 +444,7 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
         chain = prompt | primary_llm
         response = chain.invoke({"query": query})
     except Exception as e:
-        logger.warning(f"Gemma 4 31B API call failed or rate-limited in extract_chat_title: {e}. Falling back to google/gemma-4-26b-it immediately.")
+        logger.warning(f"Gemma 4 31B API call failed or rate-limited in extract_chat_title: {e}. Falling back to gemma-4-26b-a4b-it immediately.")
         try:
             fallback_llm = get_gemma_26b_llm()
             chain = prompt | fallback_llm
@@ -434,7 +453,7 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
             logger.error(f"Fallback Gemma 4 26B LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
 
-    title = response.content.strip().strip('"').strip("'")
+    title = _clean_llm_response(response.content).strip().strip('"').strip("'")
     if len(title) > 50:
         title = title[:50].rsplit(' ', 1)[0] + '...'
     return title

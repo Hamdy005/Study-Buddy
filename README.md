@@ -71,7 +71,7 @@ After generation, the summary is displayed as a **well-structured document** wit
 
 ### Chatbot
 
-- Uses **Gemma 4 31B** (`google/gemma-4-31b-it`) as primary model via Google Gemini API, with automatic fallback to **Gemma 4 26B** (`google/gemma-4-26b-it`) on rate limit.
+- Uses **Gemma 4 31B** (`gemma-4-31b-it`) as primary model via Google Gemini API, with automatic fallback to **Gemma 4 26B** (`gemma-4-26b-a4b-it`) on rate limit.
 - For **PDF and URL materials**, the chatbot replies using the stored **embeddings**.
 - Each chat session gets an **auto-generated title** based on the first user message.
 - For **custom topic** materials (no PDF/URL), the chatbot falls back to **web search tools** — **Wikipedia, ArXiv, and DuckDuckGo Search** — to retrieve relevant information.
@@ -79,7 +79,7 @@ After generation, the summary is displayed as a **well-structured document** wit
 ### Rate Limits
 
 - **Summary & Quiz generation** — 20 requests per day per user (uses Google Gemini API).
-- **Chatbot** — Powered by Google Gemini API (`google/gemma-4-31b-it` & `google/gemma-4-26b-it`).
+- **Chatbot** — Powered by Google Gemini API (`gemma-4-31b-it` & `gemma-4-26b-a4b-it`).
 
 ---
 
@@ -134,7 +134,7 @@ After generation, the summary is displayed as a **well-structured document** wit
 | Backend | FastAPI (Python) |
 | Database & Vector Store | Supabase |
 | Summary & Quiz Model | `gemini-3.1-flash-lite` via Google Gemini API |
-| Chatbot Model | `google/gemma-4-31b-it` (fallback: `google/gemma-4-26b-it`) via Gemini API |
+| Chatbot Model | `gemma-4-31b-it` (fallback: `gemma-4-26b-a4b-it`) via Gemini API |
 | Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Auth | Google OAuth |
 | Web Search | Wikipedia, ArXiv, DuckDuckGo |

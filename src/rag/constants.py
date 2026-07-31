@@ -5,12 +5,16 @@ BATCH_WINDOW_S = 0.05
 WARMUP_INTERVAL_S = 300
 
 # Web search configuration — Wiki + DDG for topics, DDG only for PDF/URL materials.
-WIKI_TOP_K_RESULTS = 1
-WIKI_DOC_CONTENT_CHARS_MAX = 1200    # max chars from Wikipedia result
+WIKI_TOP_K_RESULTS = 2                   # Number of top Wikipedia articles retrieved
+WIKI_DOC_CONTENT_CHARS_MAX = 3500        # Max chars from Wikipedia results
 
 # DuckDuckGO Search
-DUCKDUCKGO_NUM_RESULTS = 5           # number of DDG snippet results returned per search
-DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 3000  # max chars kept from the combined DDG result block
+DUCKDUCKGO_NUM_RESULTS = 8               # Number of DDG snippet results returned per search
+DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 6000  # Max chars kept from combined DDG result block
+
+# RAG & Memory Configuration
+MEMORY_WINDOW_SIZE = 20                  # Number of previous conversation turns (40 messages) preserved in memory window
+TOP_K_CHUNKS = 8                         # Number of top relevant material chunks retrieved for context
 
 RAG_PROMPT_TEMPLATE_BASE = """\
 <role>
