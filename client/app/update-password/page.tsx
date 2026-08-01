@@ -80,11 +80,13 @@ export default function UpdatePasswordPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="w-full max-w-sm space-y-6 bg-card/40 p-8 rounded-2xl border border-border/50 shadow-xl backdrop-blur-sm"
+        className="w-full max-w-sm space-y-4"
       >
-        <div className="flex justify-center mb-2">
-          <Logo className="justify-center" />
+        <div className="flex justify-center -ml-9">
+          <Logo />
         </div>
+
+        <div className="w-full space-y-6 bg-card/40 p-8 rounded-2xl border border-border/50 shadow-xl backdrop-blur-sm">
 
         {isSuccess ? (
           <div className="text-center space-y-4 py-2">
@@ -103,9 +105,6 @@ export default function UpdatePasswordPage() {
           <>
             <div className="space-y-1.5 text-center">
               <h2 className="text-xl font-bold text-foreground">Change Your Password</h2>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Enter a new password below to change your password.
-              </p>
             </div>
 
             <form onSubmit={handleUpdatePassword} className="space-y-4">
@@ -136,14 +135,14 @@ export default function UpdatePasswordPage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="confirmPassword" className="text-xs font-medium text-muted-foreground">
-                  Re-enter new password*
+                  Confirm your password*
                 </Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     id="confirmPassword"
                     type={showConfirmPassword ? 'text' : 'password'}
-                    placeholder="Re-enter new password"
+                    placeholder="Confirm your password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     className="pl-9 pr-10 h-11 bg-card/50 border-border/60 focus-visible:ring-primary"
@@ -159,25 +158,22 @@ export default function UpdatePasswordPage() {
                 </div>
               </div>
 
-              {/* Password Requirement Box */}
-              <div className="p-3.5 bg-card/60 border border-border/70 rounded-xl space-y-2 text-xs">
-                <p className="font-medium text-muted-foreground">Your password must contain:</p>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2
-                    className={`w-4 h-4 transition-colors ${
-                      password.length >= 8 ? 'text-emerald-500' : 'text-muted-foreground/30'
-                    }`}
-                  />
-                  <span
-                    className={`transition-colors ${
-                      password.length >= 8
-                        ? 'text-emerald-600 dark:text-emerald-400 font-medium'
-                        : 'text-muted-foreground'
-                    }`}
-                  >
-                    At least 8 characters in length
-                  </span>
-                </div>
+              {/* Password Requirement Plain Text */}
+              <div className="flex items-center gap-2 pt-0.5 pb-1">
+                <CheckCircle2
+                  className={`w-4 h-4 transition-colors ${
+                    password.length >= 8 ? 'text-emerald-500' : 'text-muted-foreground/40'
+                  }`}
+                />
+                <span
+                  className={`text-xs transition-colors ${
+                    password.length >= 8
+                      ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  Must contain at least 8 characters in length
+                </span>
               </div>
 
               <Button
@@ -208,6 +204,7 @@ export default function UpdatePasswordPage() {
             </Link>
           </div>
         )}
+        </div>
       </motion.div>
     </div>
   )

@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
+import { API_BASE_URL } from '@/lib/api'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -26,7 +27,25 @@ export default function ForgotPasswordPage() {
 
     setIsLoading(true)
     try {
-      const redirectToUrl = typeof window !== 'undefined' ? `${window.location.origin}/update-password` : undefined
+      // 1. Enforce in-memory rate limit via backend (3 requests per hour, 60s cooldown)
+      const rateLimitRes = await fetch(`${API_BASE_URL}/api/auth/check-email-rate-limit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'forgot_password',
+          email: email.trim(),
+        }),
+      })
+
+      if (!rateLimitRes.ok) {
+        const rateLimitData = await rateLimitRes.json().catch(() => ({ detail: 'Rate limit exceeded.' }))
+        toast.error(rateLimitData.detail || rateLimitData.message || 'Maximum 3 password reset requests per hour allowed.')
+        setIsLoading(false)
+        return
+      }
+
+      // 2. Trigger Supabase reset email
+      const redirectToUrl = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback?next=/update-password` : undefined
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: redirectToUrl,
       })
@@ -51,11 +70,13 @@ export default function ForgotPasswordPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="w-full max-w-sm space-y-6 bg-card/40 p-8 rounded-2xl border border-border/50 shadow-xl backdrop-blur-sm"
+        className="w-full max-w-sm space-y-4"
       >
-        <div className="flex justify-center mb-2">
-          <Logo className="justify-center" />
+        <div className="flex justify-center -ml-9">
+          <Logo />
         </div>
+
+        <div className="w-full space-y-6 bg-card/40 p-8 rounded-2xl border border-border/50 shadow-xl backdrop-blur-sm">
 
         {isSubmitted ? (
           <div className="text-center space-y-4 py-2">
@@ -134,7 +155,8 @@ export default function ForgotPasswordPage() {
             Back to Sign In
           </Link>
         </div>
-      </motion.div>
-    </div>
+      </div>
+    </motion.div>
+  </div>
   )
 }

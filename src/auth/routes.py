@@ -312,13 +312,20 @@ async def exchange_session(request: Request, response: Response):
     Token exchange endpoint.
 
     Accepts a Supabase JWT in the Authorization header, validates it once
-    against Supabase, then issues:
+    (locally via the Supabase JWT secret — stateless, no network call), then issues:
       • A short-lived (15 min) JWT in the response body
       • A long-lived (30 day) opaque refresh token as an HttpOnly cookie
 
     The frontend should call this right after any Supabase sign-in event
     (onAuthStateChange fires with a session).
+
+    IMPORTANT: We decode the Supabase JWT locally instead of calling
+    client.auth.get_user() to avoid a 403 race condition — the Supabase JS
+    SDK rotates the session internally immediately after sign-in, so a
+    stateful get_user() call often fails before our backend can validate it.
     """
+    import jwt as pyjwt
+
     # 1. Extract the Supabase token from the request
     headers = {k.lower(): v for k, v in request.headers.items()}
     auth = headers.get("authorization", "")
@@ -328,23 +335,75 @@ async def exchange_session(request: Request, response: Response):
     if not raw_supabase_token:
         raise HTTPException(401, "Authorization header with Supabase token required")
 
-    # 2. Validate the Supabase token once
-    client = get_auth_supabase() or get_supabase()
-    if not client:
-        raise HTTPException(503, "Auth service unavailable")
+    # Skip HF space tokens — they're not user auth tokens
+    if raw_supabase_token.startswith("hf_"):
+        raise HTTPException(401, "HuggingFace space token is not a valid user auth token")
 
-    try:
-        sb_user = _verify_token_cached(client, raw_supabase_token)
-        user_id  = str(sb_user.id)
-        email    = getattr(sb_user, "email", "") or ""
-    except Exception:
-        raise HTTPException(401, "Invalid or expired Supabase token")
+    # 2. Decode the Supabase JWT locally (stateless — no round-trip to Supabase)
+    supabase_jwt_secret = settings.supabase_jwt_secret
+    user_id = None
+    email = ""
+    user_metadata: dict = {}
+
+    if supabase_jwt_secret:
+        try:
+            payload = pyjwt.decode(
+                raw_supabase_token,
+                supabase_jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},  # Supabase uses 'authenticated' as aud
+            )
+            user_id = payload.get("sub")
+            email = payload.get("email", "")
+            user_metadata = payload.get("user_metadata", {})
+        except pyjwt.ExpiredSignatureError:
+            raise HTTPException(401, "Supabase token has expired. Please sign in again.")
+        except pyjwt.InvalidTokenError as e:
+            raise HTTPException(401, f"Invalid Supabase token: {e}")
+    else:
+        # Fallback: decode claims without signature verification if secret is not set
+        try:
+            import time
+            payload = pyjwt.decode(
+                raw_supabase_token,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            exp = payload.get("exp")
+            if exp and time.time() > exp:
+                raise HTTPException(401, "Supabase token has expired. Please sign in again.")
+            user_id = payload.get("sub")
+            email = payload.get("email", "")
+            user_metadata = payload.get("user_metadata", {})
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Fallback: validate via Supabase API (slower, but works if unverified decoding failed)
+    if not user_id:
+        client = get_auth_supabase() or get_supabase()
+        if not client:
+            raise HTTPException(503, "Auth service unavailable")
+        try:
+            sb_user = _verify_token_cached(client, raw_supabase_token)
+            user_id = str(sb_user.id)
+            email = getattr(sb_user, "email", "") or ""
+            user_metadata = getattr(sb_user, "user_metadata", {}) or {}
+        except Exception:
+            raise HTTPException(401, "Invalid or expired Supabase token")
+
+    if not user_id:
+        raise HTTPException(401, "Could not extract user identity from token")
 
     # 3. Ensure a profile row exists (first login race-safe)
     profile = get_user_by_id(user_id)
     if not profile:
-        meta  = getattr(sb_user, "user_metadata", {}) or {}
-        name  = meta.get("full_name") or meta.get("name") or email.split("@")[0] or "User"
+        name = (
+            user_metadata.get("full_name")
+            or user_metadata.get("name")
+            or email.split("@")[0]
+            or "User"
+        )
         profile = create_user(name=name, email=email, password="", user_id=user_id)
 
     # 4. Issue our tokens

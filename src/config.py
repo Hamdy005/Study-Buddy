@@ -25,6 +25,10 @@ class Settings:
         os.getenv("SUPABASE_ANON_KEY")
         or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
     )
+    supabase_jwt_secret: str = (
+        os.getenv("SUPABASE_JWT_SECRET")
+        or os.getenv("JWT_SECRET", "")
+    )
     cloudinary_cloud_name: str = (
         os.getenv("CLOUDINARY_CLOUD_NAME")
         or os.getenv("CLOUD_NAME", "")
@@ -60,6 +64,10 @@ class Settings:
     jwt_algorithm: str  = os.getenv("JWT_ALGORITHM", "HS256")
     # Set to 'development' locally so Secure cookie flag is not required over HTTP
     environment: str    = os.getenv("ENVIRONMENT", "production")
+    # Supabase JWT secret — used to verify Supabase-issued tokens locally (stateless).
+    # Found in: Supabase Dashboard → Project Settings → API → JWT Settings → JWT Secret
+    # This avoids the 403 "Session does not exist" error from stateful get_user() calls.
+    supabase_jwt_secret: str = os.getenv("SUPABASE_JWT_SECRET", "")
 
 
 @lru_cache()

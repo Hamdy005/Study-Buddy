@@ -1,8 +1,10 @@
 import time
+import jwt as pyjwt
 from fastapi import HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from typing import Any, Optional
 
+from src.config import settings
 from src.database import get_supabase, get_auth_supabase
 
 DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -75,7 +77,7 @@ async def get_current_user_id(request: Request) -> str:
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
-    # ── Mode 1: our own stateless JWT (fast — no network call) ───────────────
+    # ── Mode 1: our own stateless JWT ────────────────────────────────────────
     try:
         from src.auth.jwt_utils import decode_access_token
         payload = decode_access_token(token)
@@ -83,7 +85,30 @@ async def get_current_user_id(request: Request) -> str:
         if user_id:
             return str(user_id)
     except Exception:
-        pass  # Fall through to Supabase validation
+        pass
+
+    # ── Mode 1b: Supabase JWT stateless fallback (avoids 403 network race) ───
+    try:
+        if settings.supabase_jwt_secret:
+            payload = pyjwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        else:
+            payload = pyjwt.decode(
+                token,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            exp = payload.get("exp")
+            if exp and time.time() > exp:
+                payload = {}
+        user_id = payload.get("sub")
+        if user_id:
+            return str(user_id)
+    except Exception:
+        pass
 
     # ── Mode 2: Supabase token (backwards-compat for Google OAuth sessions) ──
     try:
@@ -110,6 +135,29 @@ async def get_current_user(request: Request) -> Any:
     try:
         from src.auth.jwt_utils import decode_access_token
         payload = decode_access_token(token)
+        user_id = payload.get("sub")
+        if user_id:
+            return {"id": user_id, "email": payload.get("email", "")}
+    except Exception:
+        pass
+
+    # ── Mode 1b: Supabase JWT stateless fallback ─────────────────────────────
+    try:
+        if settings.supabase_jwt_secret:
+            payload = pyjwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        else:
+            payload = pyjwt.decode(
+                token,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            exp = payload.get("exp")
+            if exp and time.time() > exp:
+                payload = {}
         user_id = payload.get("sub")
         if user_id:
             return {"id": user_id, "email": payload.get("email", "")}

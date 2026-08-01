@@ -107,6 +107,14 @@ export default function HomePage() {
       return
     }
 
+    const typeParam = searchParams.get('type') || hashParams.get('type')
+    const nextParam = searchParams.get('next') || hashParams.get('next')
+
+    if (typeParam === 'recovery' || nextParam === '/update-password' || nextParam?.includes('update-password')) {
+      router.replace('/update-password')
+      return
+    }
+
     if (!isAuthLoading && user) {
       router.replace('/dashboard')
     }

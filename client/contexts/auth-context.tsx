@@ -254,28 +254,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         console.error('Session exchange failed:', err)
-        // Fall back: still let the user appear logged in via Supabase token
-        // (dual-mode backend will still accept it)
         if (!isActive) return
-        const sbUser = session.user
-        const display = getDisplayCache(sbUser.id)
-        const optimistic: UserData = {
-          id: sbUser.id,
-          name:
-            display?.name ||
-            sbUser.user_metadata?.full_name ||
-            sbUser.user_metadata?.name ||
-            sbUser.email?.split('@')[0] ||
-            'User',
-          email: sbUser.email || '',
-          avatar: display?.avatar ?? sbUser.user_metadata?.avatar_url,
-        }
-        setUser(optimistic)
-        // Use the Supabase token directly as a fallback — backend dual-mode accepts it
-        applyToken(session.access_token)
-        if (!display) {
-          setDisplayCache(sbUser.id, optimistic.name, optimistic.avatar)
-        }
+        setUser(null)
+        applyToken(null)
+        localStorage.removeItem(PROFILE_CACHE_KEY)
       }
     })
 
