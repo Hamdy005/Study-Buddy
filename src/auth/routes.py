@@ -1,10 +1,13 @@
 import uuid
+import logging
 import cloudinary
 import cloudinary.uploader
 from datetime import timezone, datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Request
 from fastapi import Depends
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from src.config import settings
 from src.database import get_auth_supabase, get_supabase
@@ -415,12 +418,19 @@ async def refresh_session(request: Request, response: Response):
     """
     raw = request.cookies.get(REFRESH_COOKIE_NAME)
     if not raw:
+        logger.warning("Refresh session failed: No refresh token cookie found in request. Cookies present: %s", list(request.cookies.keys()))
         raise HTTPException(401, "No refresh token cookie found")
 
     token_hash = hash_token(raw)
     row = get_refresh_token(token_hash)
 
-    if not row or not is_token_valid(row):
+    if not row:
+        logger.warning("Refresh session failed: Token hash (%s...) not found in refresh_tokens table", token_hash[:8])
+        _clear_refresh_cookie(response)
+        raise HTTPException(401, "Refresh token is invalid, expired, or revoked")
+
+    if not is_token_valid(row):
+        logger.warning("Refresh session failed: Token for user %s is expired or revoked (expires_at=%s, revoked=%s)", row.get("user_id"), row.get("expires_at"), row.get("revoked"))
         _clear_refresh_cookie(response)
         raise HTTPException(401, "Refresh token is invalid, expired, or revoked")
 
