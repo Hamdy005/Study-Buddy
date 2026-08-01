@@ -112,12 +112,12 @@ function forceSignOut() {
     localStorage.removeItem('auth_user')
     localStorage.removeItem('usage_cache')
     localStorage.removeItem('cached_materials')
-    
+
     // Notify listeners (e.g. AuthContext)
     _forceSignOutListeners.forEach(fn => fn())
 
     // Sign out of Supabase as well (for Google OAuth sessions)
-    await supabase.auth.signOut().catch(() => {})
+    await supabase.auth.signOut().catch(() => { })
 
     // Redirect to login page
     if (window.location.pathname !== '/') {
@@ -253,7 +253,7 @@ export const authAPI = {
       })
     } catch { /* best-effort */ }
     setApiToken(null)
-    supabase.auth.signOut().catch(() => {})
+    supabase.auth.signOut().catch(() => { })
   },
 
   googleAuth: (token: string) =>

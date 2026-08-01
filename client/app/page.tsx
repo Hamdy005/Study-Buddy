@@ -51,7 +51,7 @@ export default function HomePage() {
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const { user, isLoading: isAuthLoading, logout } = useAuth()
+  const { user, isLoading: isAuthLoading, logout, login } = useAuth()
   const router = useRouter()
   const { resolvedTheme } = useTheme()
   const [btnWidth, setBtnWidth] = useState(384)
@@ -65,18 +65,21 @@ export default function HomePage() {
     setIsSubmitting(true)
     setErrorMessage(null)
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       })
-      if (error) {
-        toast.error(error.message)
+      if (error || !data.session) {
+        toast.error(error?.message || 'Sign in failed')
       } else {
+        const { authAPI } = await import('@/lib/api')
+        const result = await authAPI.exchangeSession(data.session.access_token)
+        login(result.user, result.access_token)
         toast.success('Signed in successfully!')
         router.replace('/dashboard')
       }
-    } catch {
-      toast.error('Sign in failed. Please try again.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Sign in failed. Please try again.')
     } finally {
       setIsSubmitting(false)
     }

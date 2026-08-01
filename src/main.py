@@ -110,9 +110,21 @@ async def normalize_path(request, call_next):
         request.scope["path"] = path.replace("//", "/")
     return await call_next(request)
 
+
+# When allow_credentials=True, browsers REJECT responses with "Access-Control-Allow-Origin: *"
+# and refuse to store or send cookies. We must always use explicit origins.
+_DEFAULT_ORIGINS = [
+    "https://www.studybuddyai.dev",
+    "https://studybuddyai.dev",
+    "https://hamdy005-study-buddy.hf.space",
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+_cors_origins = settings.cors_allowed_origins if settings.cors_allowed_origins else _DEFAULT_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_allowed_origins or ["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -38,59 +38,26 @@ export default function AuthCallbackPage() {
       }
 
       const session = data.session
-      const sbUser = session.user
-
-      // ── Prefer the DB name/avatar (per-user display cache) over Google metadata ────
-      // Each account's cache is keyed by user ID so different accounts never mix.
-      const userId = sbUser.id
-      const DISPLAY_CACHE_KEY = `auth_display_${userId}`
-      const PROFILE_CACHE_KEY = 'auth_user'
-      const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
-
-      let displayName =
-        sbUser.user_metadata?.full_name ||
-        sbUser.user_metadata?.name ||
-        sbUser.email?.split('@')[0] ||
-        'User'
-      let displayAvatar: string | undefined = sbUser.user_metadata?.avatar_url
 
       try {
-        const raw = localStorage.getItem(DISPLAY_CACHE_KEY)
-        if (raw) {
-          const display = JSON.parse(raw)
-          if (display.name) displayName = display.name
-          if (display.avatar !== undefined) displayAvatar = display.avatar
+        const { authAPI } = await import('@/lib/api')
+        const result = await authAPI.exchangeSession(session.access_token)
+        const profile = result.user
+
+        login(profile, result.access_token)
+
+        const typeParam = searchParams.get('type') || hashParams.get('type')
+        const nextParam = searchParams.get('next') || hashParams.get('next')
+
+        if (typeParam === 'recovery' || nextParam === '/update-password' || nextParam?.includes('update-password')) {
+          router.replace('/update-password')
+        } else {
+          router.replace('/dashboard')
         }
-      } catch {}
-
-      const userData = {
-        id: sbUser.id,
-        name: displayName,
-        email: sbUser.email!,
-        avatar: displayAvatar,
-      }
-
-      // ── Write caches BEFORE calling login() ────────────────────────────────
-      // The auth context's onAuthStateChange fires concurrently the moment
-      // getSession() resolves. If the profile cache is empty at that point,
-      // fetchAndSetProfile() falls through to its optimistic render and briefly
-      // shows Google's name/avatar. Pre-populating the cache here ensures the
-      // concurrent listener finds data immediately and returns early.
-      try {
-        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(userData))
-        localStorage.setItem(PROFILE_CACHE_TS_KEY, String(Date.now()))
-        localStorage.setItem(DISPLAY_CACHE_KEY, JSON.stringify({ name: displayName, avatar: displayAvatar }))
-      } catch {}
-
-      login(userData, session.access_token)
-
-      const typeParam = searchParams.get('type') || hashParams.get('type')
-      const nextParam = searchParams.get('next') || hashParams.get('next')
-
-      if (typeParam === 'recovery' || nextParam === '/update-password' || nextParam?.includes('update-password')) {
-        router.replace('/update-password')
-      } else {
-        router.replace('/dashboard')
+      } catch (err) {
+        console.error('OAuth callback session exchange failed:', err)
+        logout()
+        router.replace('/?error=oauth_failed')
       }
     }
 
