@@ -1,14 +1,26 @@
 import uuid
 import cloudinary
 import cloudinary.uploader
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from datetime import timezone, datetime
+from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Request
 from fastapi import Depends
 from typing import Optional
 
 from src.config import settings
 from src.database import get_auth_supabase, get_supabase
 from src.store import create_user, get_user_by_email, delete_user_data, update_user_profile, get_user_by_id
-from src.dependencies import get_current_user_id, get_current_user
+from src.dependencies import get_current_user_id, get_current_user, _verify_token_cached
+from src.auth.jwt_utils import (
+    create_access_token,
+    create_refresh_token,
+    hash_token,
+)
+from src.auth.refresh_token_store import (
+    save_refresh_token,
+    get_refresh_token,
+    revoke_refresh_token,
+    is_token_valid,
+)
 from .schemas import ProfileUpdateRequest, EmailRateLimitRequest
 from .constants import (
     ALLOWED_MIME_TYPES,
@@ -16,6 +28,9 @@ from .constants import (
     AVATAR_BUCKET,
     PLACEHOLDER_DOMAINS,
     EMAIL_RATE_LIMITS,
+    REFRESH_COOKIE_NAME,
+    REFRESH_COOKIE_PATH,
+    REFRESH_COOKIE_MAX_AGE,
 )
 from .rate_limiter import (
     enforce_email_rate_limit,
@@ -24,6 +39,33 @@ from .rate_limiter import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
+
+
+# ── Cookie helper ─────────────────────────────────────────────────────────────
+# Constants are defined in src/auth/constants.py
+
+
+def _set_refresh_cookie(response: Response, raw_token: str) -> None:
+    """Attach the refresh token as an HttpOnly cookie on *response*."""
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=raw_token,
+        httponly=True,
+        secure=(settings.environment != "development"),
+        samesite="none",   # required for cross-origin Vercel ↔ HF Space
+        max_age=REFRESH_COOKIE_MAX_AGE,
+        path=REFRESH_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """Remove the refresh token cookie."""
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path=REFRESH_COOKIE_PATH,
+        samesite="none",
+        secure=(settings.environment != "development"),
+    )
 
 
 @router.post("/upload-avatar")
@@ -262,3 +304,159 @@ async def email_limit_status(action: str, email: str):
     return {"status": "success", "action": action, "email": email, **status_info}
 
 
+# ── Token Exchange & Refresh ───────────────────────────────────────────────────
+
+@router.post("/session")
+async def exchange_session(request: Request, response: Response):
+    """
+    Token exchange endpoint.
+
+    Accepts a Supabase JWT in the Authorization header, validates it once
+    against Supabase, then issues:
+      • A short-lived (15 min) JWT in the response body
+      • A long-lived (30 day) opaque refresh token as an HttpOnly cookie
+
+    The frontend should call this right after any Supabase sign-in event
+    (onAuthStateChange fires with a session).
+    """
+    # 1. Extract the Supabase token from the request
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    auth = headers.get("authorization", "")
+    x_auth = headers.get("x-auth-token", "")
+    raw_supabase_token = x_auth or (auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else None)
+
+    if not raw_supabase_token:
+        raise HTTPException(401, "Authorization header with Supabase token required")
+
+    # 2. Validate the Supabase token once
+    client = get_auth_supabase() or get_supabase()
+    if not client:
+        raise HTTPException(503, "Auth service unavailable")
+
+    try:
+        sb_user = _verify_token_cached(client, raw_supabase_token)
+        user_id  = str(sb_user.id)
+        email    = getattr(sb_user, "email", "") or ""
+    except Exception:
+        raise HTTPException(401, "Invalid or expired Supabase token")
+
+    # 3. Ensure a profile row exists (first login race-safe)
+    profile = get_user_by_id(user_id)
+    if not profile:
+        meta  = getattr(sb_user, "user_metadata", {}) or {}
+        name  = meta.get("full_name") or meta.get("name") or email.split("@")[0] or "User"
+        profile = create_user(name=name, email=email, password="", user_id=user_id)
+
+    # 4. Issue our tokens
+    access_token  = create_access_token(user_id, email)
+    raw_refresh   = create_refresh_token()
+    refresh_hash  = hash_token(raw_refresh)
+    save_refresh_token(user_id, refresh_hash)
+
+    _set_refresh_cookie(response, raw_refresh)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": profile,
+    }
+
+
+@router.post("/refresh")
+async def refresh_session(request: Request, response: Response):
+    """
+    Silently re-issue a new access token using the HttpOnly refresh token cookie.
+
+    Rotates the refresh token on every use (old token is revoked, new one is issued)
+    so a stolen token can only be used once before it's invalidated.
+    """
+    raw = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw:
+        raise HTTPException(401, "No refresh token cookie found")
+
+    token_hash = hash_token(raw)
+    row = get_refresh_token(token_hash)
+
+    if not row or not is_token_valid(row):
+        _clear_refresh_cookie(response)
+        raise HTTPException(401, "Refresh token is invalid, expired, or revoked")
+
+    user_id = str(row["user_id"])
+
+    # Fetch the user's email for the new access token payload
+    profile = get_user_by_id(user_id)
+    email = (profile or {}).get("email", "")
+
+    # Rotate: revoke old, issue new refresh token
+    revoke_refresh_token(token_hash)
+    new_raw_refresh = create_refresh_token()
+    new_hash        = hash_token(new_raw_refresh)
+    save_refresh_token(user_id, new_hash)
+
+    access_token = create_access_token(user_id, email)
+
+    _set_refresh_cookie(response, new_raw_refresh)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    """
+    Revoke the refresh token in the database and clear the cookie.
+
+    This is the only true logout — do not rely on JWT expiry alone.
+    The short-lived access token will expire naturally within 15 minutes.
+    """
+    raw = request.cookies.get(REFRESH_COOKIE_NAME)
+    if raw:
+        token_hash = hash_token(raw)
+        revoke_refresh_token(token_hash)
+
+    _clear_refresh_cookie(response)
+    return {"status": "ok", "message": "Logged out successfully"}
+
+
+@router.get("/me")
+async def get_me(
+    user_id: str = Depends(get_current_user_id),
+    current_user=Depends(get_current_user),
+):
+    """
+    Return the authenticated user's profile.
+
+    Protected route — requires a valid JWT in Authorization: Bearer header.
+    This is a thin wrapper over the existing get_profile logic so both
+    /api/auth/profile and /api/auth/me return the same shape.
+    """
+    user = get_user_by_id(user_id)
+    if not user:
+        # Fallback: build minimal profile from JWT payload
+        uid = (
+            getattr(current_user, "id", None)
+            or (current_user.get("id") if isinstance(current_user, dict) else None)
+        )
+        if uid:
+            from src.store import _map_profile, get_usage
+            email = (
+                getattr(current_user, "email", "") or
+                (current_user.get("email") if isinstance(current_user, dict) else "") or ""
+            )
+            real_usage = get_usage(uid)
+            user = _map_profile({
+                "id": uid,
+                "display_name": email.split("@")[0] or "User",
+                "email": email,
+                "avatar_url": "",
+                "daily_requests": real_usage.get("used", 0),
+                "last_request_date": (
+                    datetime.now(timezone.utc).date().isoformat()
+                ),
+            })
+
+    if not user:
+        raise HTTPException(404, "Profile not found")
+    return {"status": "success", "user": user}

@@ -55,6 +55,12 @@ class Settings:
         if w.strip()
     ]
 
+    # ── JWT / Refresh-Token Auth ───────────────────────────────────────────────
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "")
+    jwt_algorithm: str  = os.getenv("JWT_ALGORITHM", "HS256")
+    # Set to 'development' locally so Secure cookie flag is not required over HTTP
+    environment: str    = os.getenv("ENVIRONMENT", "production")
+
 
 @lru_cache()
 def get_settings() -> Settings:

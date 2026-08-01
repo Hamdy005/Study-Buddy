@@ -1,20 +1,26 @@
 import os
 from collections.abc import AsyncGenerator
 from io import BytesIO
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 # Environment Variables
-os.environ["SUPABASE_URL"] = os.getenv("SUPABASE_URL", "https://placeholder-project.supabase.co")
-os.environ["SUPABASE_KEY"] = os.getenv("SUPABASE_KEY", "placeholder-service-key")
+os.environ["SUPABASE_URL"]    = os.getenv("SUPABASE_URL",    "https://placeholder-project.supabase.co")
+os.environ["SUPABASE_KEY"]    = os.getenv("SUPABASE_KEY",    "placeholder-service-key")
 os.environ["SUPABASE_ANON_KEY"] = os.getenv("SUPABASE_ANON_KEY", "placeholder-anon-key")
-os.environ["SECRET_KEY"] = os.getenv("SECRET_KEY", "test-secret-key-for-testing-only")
+os.environ["SECRET_KEY"]      = os.getenv("SECRET_KEY",      "test-secret-key-for-testing-only")
+# JWT settings used by src.auth.jwt_utils
+os.environ["JWT_SECRET_KEY"]  = os.getenv("JWT_SECRET_KEY",  "test-jwt-secret-key-for-testing-only-32x")
+os.environ["JWT_ALGORITHM"]   = os.getenv("JWT_ALGORITHM",   "HS256")
+os.environ["ENVIRONMENT"]     = os.getenv("ENVIRONMENT",     "development")
 
 from src.dependencies import DEV_USER_ID, get_current_user_id
 from src.main import app
 from src.auth.rate_limiter import _store, _cooldowns
+from src.auth.jwt_utils import create_access_token, create_refresh_token, hash_token
 
 pytest_plugins = ["anyio"]
 
@@ -106,3 +112,67 @@ def make_image_bytes(size_bytes: int = 1024) -> bytes:
     ])
     padding = b"\x00" * max(0, size_bytes - len(png_header))
     return png_header + padding
+
+
+# ── JWT / Auth shared constants ───────────────────────────────────────────────
+# Used by test_jwt_auth.py and any future auth-related test files.
+
+FAKE_USER_ID = DEV_USER_ID
+FAKE_EMAIL   = "test@example.com"
+FAKE_NAME    = "Test User"
+
+FAKE_PROFILE = {
+    "id":    FAKE_USER_ID,
+    "name":  FAKE_NAME,
+    "email": FAKE_EMAIL,
+    "avatar": "",
+    "theme": "system",
+    "usage": {"used": 0, "limit": 20, "remaining": 20},
+}
+
+
+def fake_sb_user(
+    user_id: str = FAKE_USER_ID,
+    email: str = FAKE_EMAIL,
+) -> MagicMock:
+    """A minimal mock that looks like a Supabase User object."""
+    m = MagicMock()
+    m.id            = user_id
+    m.email         = email
+    m.user_metadata = {"full_name": FAKE_NAME}
+    return m
+
+
+def future_expires_at(days: int = 30) -> str:
+    """ISO-8601 timestamp that is `days` from now (for valid refresh token rows)."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+
+def past_expires_at(seconds: int = 10) -> str:
+    """ISO-8601 timestamp that is `seconds` in the past (for expired token rows)."""
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
+# ── JWT fixtures ──────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def raw_access_token() -> str:
+    """A freshly-signed 15-min JWT for the dev user."""
+    return create_access_token(FAKE_USER_ID, FAKE_EMAIL)
+
+
+@pytest.fixture
+def raw_refresh_token() -> str:
+    """A cryptographically-random opaque refresh token string."""
+    return create_refresh_token()
+
+
+@pytest.fixture
+def valid_refresh_row(raw_refresh_token: str) -> dict:
+    """A DB row representing a valid (not revoked, not expired) refresh token."""
+    return {
+        "user_id":    FAKE_USER_ID,
+        "token_hash": hash_token(raw_refresh_token),
+        "expires_at": future_expires_at(30),
+        "revoked":    False,
+    }

@@ -78,7 +78,13 @@ const PENDING_UPLOAD_TIMEOUT_MS = 720000
 
 export default function DashboardPage() {
   const router = useRouter()
-  const { user, token } = useAuth()
+  const { user, token, isLoading: isAuthLoading } = useAuth()
+
+  useEffect(() => {
+    if (!isAuthLoading && !user) {
+      router.replace('/')
+    }
+  }, [user, isAuthLoading, router])
   const [materials, setMaterials] = useState<Material[]>([])
   const [isUploadOpen, setIsUploadOpen] = useState(false)
   const [urlInput, setUrlInput] = useState('')

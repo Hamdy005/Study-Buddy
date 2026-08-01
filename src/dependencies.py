@@ -1,5 +1,5 @@
 import time
-from fastapi import Depends, HTTPException, Header, status, Request
+from fastapi import HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from typing import Any, Optional
 
@@ -41,8 +41,8 @@ def _verify_token_cached(client, token: str) -> Any:
 
 def _extract_token(request: Request) -> Optional[str]:
     """
-    Extract Supabase JWT from headers — case-insensitive.
-    Priority: X-Auth-Token → Authorization (skip HF tokens)
+    Extract JWT from headers — case-insensitive.
+    Priority: X-Auth-Token → Authorization (skip HF space tokens)
     """
     headers = {k.lower(): v for k, v in request.headers.items()}
 
@@ -64,10 +64,9 @@ def _extract_token(request: Request) -> Optional[str]:
 
 
 async def get_current_user_id(request: Request) -> str:
-    # Use a single cached client — prefer the auth client, fall back to service client
     client = get_auth_supabase() or get_supabase()
 
-    # Dev mode
+    # Dev mode — no Supabase configured
     if client is None:
         return DEV_USER_ID
 
@@ -76,6 +75,17 @@ async def get_current_user_id(request: Request) -> str:
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
+    # ── Mode 1: our own stateless JWT (fast — no network call) ───────────────
+    try:
+        from src.auth.jwt_utils import decode_access_token
+        payload = decode_access_token(token)
+        user_id = payload.get("sub")
+        if user_id:
+            return str(user_id)
+    except Exception:
+        pass  # Fall through to Supabase validation
+
+    # ── Mode 2: Supabase token (backwards-compat for Google OAuth sessions) ──
     try:
         user = _verify_token_cached(client, token)
         return str(user.id)
@@ -85,7 +95,6 @@ async def get_current_user_id(request: Request) -> str:
 
 
 async def get_current_user(request: Request) -> Any:
-    # Use a single cached client — prefer the auth client, fall back to service client
     client = get_auth_supabase() or get_supabase()
 
     # Dev mode
@@ -94,13 +103,25 @@ async def get_current_user(request: Request) -> Any:
 
     token = _extract_token(request)
 
-    if token:
-        try:
-            user = _verify_token_cached(client, token)
-            if user:
-                return user
-        except Exception as e:
-            print(f"Token validation error: {e}")
-            pass
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+
+    # ── Mode 1: our own stateless JWT ────────────────────────────────────────
+    try:
+        from src.auth.jwt_utils import decode_access_token
+        payload = decode_access_token(token)
+        user_id = payload.get("sub")
+        if user_id:
+            return {"id": user_id, "email": payload.get("email", "")}
+    except Exception:
+        pass
+
+    # ── Mode 2: Supabase token (backwards compat) ────────────────────────────
+    try:
+        user = _verify_token_cached(client, token)
+        if user:
+            return user
+    except Exception as e:
+        print(f"Token validation error: {e}")
 
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")

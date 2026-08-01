@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useTheme } from 'next-themes'
 import { supabase } from '@/lib/supabase'
-import { authAPI } from '@/lib/api'
+import { authAPI, setApiToken, onForceSignOut } from '@/lib/api'
 
 export interface UserData {
   id: string
@@ -22,22 +22,17 @@ interface AuthContextType {
   user: UserData | null
   token: string | null
   login: (user: UserData, token: string) => void
-  logout: () => void
+  logout: () => Promise<void>
   updateUser: (data: Partial<UserData>) => void
   isLoading: boolean
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
-const PROFILE_CACHE_KEY = 'auth_user'
-const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
-const PROFILE_CACHE_TTL_MS = 60_000 // 60 seconds
-
-// ── Display-only cache (name + avatar), keyed per user ────────────────────────
-// Keyed as `auth_display_<userId>` so different accounts never bleed into each other.
-// This cache is intentionally kept through logout — it contains NO sensitive data.
-// Its sole purpose is to show the correct user's name/avatar INSTANTLY on page load
-// without waiting for any async session or API calls to complete.
+// ── Display-only cache (name + avatar), keyed per user ─────────────────────
+// Keyed as `auth_display_<userId>` so different accounts never bleed.
+// Contains NO sensitive data — purely for instant UI render on next visit.
+// Intentionally persisted through logout.
 
 function displayCacheKey(userId: string): string {
   return `auth_display_${userId}`
@@ -59,19 +54,10 @@ function setDisplayCache(userId: string, name: string, avatar?: string) {
   } catch {}
 }
 
-/** Read the user ID from the stale profile data (ignoring TTL). Used when the
- *  token is valid but the profile cache has expired, so we can still key into
- *  the correct per-user display cache without waiting for an async session call. */
-function getLastStoredUserId(): string | null {
-  try {
-    const raw = localStorage.getItem(PROFILE_CACHE_KEY)
-    if (!raw) return null
-    const profile = JSON.parse(raw)
-    return (profile as UserData)?.id || null
-  } catch {
-    return null
-  }
-}
+// ── Non-sensitive profile cache (no tokens) ────────────────────────────────
+const PROFILE_CACHE_KEY    = 'auth_user'
+const PROFILE_CACHE_TS_KEY = 'auth_user_cached_at'
+const PROFILE_CACHE_TTL_MS = 60_000 // 60 seconds
 
 function getCachedProfile(): UserData | null {
   try {
@@ -88,7 +74,6 @@ function getCachedProfile(): UserData | null {
 function setCachedProfile(user: UserData) {
   localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(user))
   localStorage.setItem(PROFILE_CACHE_TS_KEY, String(Date.now()))
-  // Always keep the per-user display cache in sync with the latest real profile
   setDisplayCache(user.id, user.name, user.avatar)
 }
 
@@ -97,59 +82,132 @@ function bustProfileCache() {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UserData | null>(null)
+  // ── The access JWT lives ONLY here — never in localStorage ────────────────
   const [token, setToken] = useState<string | null>(null)
+  const [user, setUser]   = useState<UserData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const { setTheme } = useTheme()
 
   useEffect(() => {
-    if (user?.theme) {
-      setTheme(user.theme)
-    }
+    if (user?.theme) setTheme(user.theme)
   }, [user?.theme, setTheme])
 
-  // ── Hydrate from localStorage on first render ──────────────────────────────
+  // ── Helper: keep module-level token store in sync ─────────────────────────
+  const applyToken = useCallback((t: string | null) => {
+    setToken(t)
+    setApiToken(t) // also updates the api.ts module-level variable
+  }, [])
+
+  // ── Fetch the full backend profile and populate state ─────────────────────
+  const fetchAndApplyProfile = useCallback(async (isActive: () => boolean) => {
+    const cached = getCachedProfile()
+    if (cached && isActive()) {
+      setUser(cached)
+      return
+    }
+    try {
+      const res = await authAPI.getProfile()
+      if (res.user && isActive()) {
+        if (!(res.user as any)._is_fallback) {
+          setCachedProfile(res.user)
+        }
+        setUser(res.user)
+      }
+    } catch {
+      // Profile fetch failed — user state from optimistic render is still visible
+    }
+  }, [])
+
+  // ── Listen for force sign-out events from API interceptors ─────────────────
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search)
-    const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
-    if (searchParams.has('error') || hashParams.has('error')) {
-      localStorage.removeItem('auth_token')
-      localStorage.removeItem(PROFILE_CACHE_KEY)
+    const unsubscribe = onForceSignOut(() => {
+      setUser(null)
+      applyToken(null)
       bustProfileCache()
+      localStorage.removeItem(PROFILE_CACHE_KEY)
+      localStorage.removeItem('cached_materials')
+    })
+    return unsubscribe
+  }, [applyToken])
+
+  // ── On mount: try silent re-auth via the HttpOnly refresh cookie ───────────
+  // This is the key behaviour: on a hard page refresh the JWT is gone from
+  // memory, but the HttpOnly cookie survives. We ask our backend to issue a
+  // new JWT without any user interaction.
+  useEffect(() => {
+    let active = true
+
+    const searchParams = new URLSearchParams(window.location.search)
+    const hashParams   = new URLSearchParams(window.location.hash.replace('#', '?'))
+    if (searchParams.has('error') || hashParams.has('error')) {
+      setUser(null)
+      applyToken(null)
       setIsLoading(false)
       return
     }
 
-    const storedToken = localStorage.getItem('auth_token')
-    const storedUser = localStorage.getItem(PROFILE_CACHE_KEY)
-    if (storedToken && storedUser) {
+    const trySilentRefresh = async () => {
       try {
-        setToken(storedToken)
-        setUser(JSON.parse(storedUser))
-      } catch {
-        localStorage.removeItem('auth_token')
-        localStorage.removeItem(PROFILE_CACHE_KEY)
-        bustProfileCache()
-      }
-    } else if (storedToken) {
-      // Token exists but no full cached profile (e.g. right after sign-in or cache expired).
-      // Recover the user ID from the stale profile data to key into the right display cache.
-      const lastUserId = getLastStoredUserId()
-      if (lastUserId) {
-        const display = getDisplayCache(lastUserId)
-        if (display) {
-          // Partial user — full profile will arrive via the async Supabase session call.
-          setUser({ id: lastUserId, name: display.name, email: '', avatar: display.avatar })
+        const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include', // sends the HttpOnly cookie automatically
+        })
+        if (!res.ok) {
+          if (active) {
+            setUser(null)
+            applyToken(null)
+            bustProfileCache()
+            localStorage.removeItem(PROFILE_CACHE_KEY)
+            localStorage.removeItem('cached_materials')
+            setIsLoading(false)
+          }
+          return
         }
+        const data = await res.json()
+        const newToken: string = data.access_token
+        if (!newToken || !active) {
+          if (active) {
+            setUser(null)
+            applyToken(null)
+            setIsLoading(false)
+          }
+          return
+        }
+        applyToken(newToken)
+
+        // Show name/avatar from display cache instantly while profile loads
+        const cachedProfile = getCachedProfile()
+        if (cachedProfile && active) {
+          setUser(cachedProfile)
+        }
+
+        await fetchAndApplyProfile(() => active)
+      } catch {
+        // No cookie / network error — treat as logged out
+        if (active) {
+          setUser(null)
+          applyToken(null)
+          bustProfileCache()
+          localStorage.removeItem(PROFILE_CACHE_KEY)
+          localStorage.removeItem('cached_materials')
+        }
+      } finally {
+        if (active) setIsLoading(false)
       }
     }
-    setIsLoading(false)
-  }, [])
 
-  // ── Supabase session sync ──────────────────────────────────────────────────
+    trySilentRefresh()
+    return () => { active = false }
+  }, [applyToken, fetchAndApplyProfile])
+
+  // ── Supabase onAuthStateChange: exchange Supabase token for our JWT ────────
+  // This fires after any Supabase sign-in (Google OAuth, email magic-link, etc.)
+  // We exchange the Supabase token once for our own short-lived JWT + HttpOnly
+  // refresh cookie and from that point on use our tokens only.
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
-    const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'))
+    const hashParams   = new URLSearchParams(window.location.hash.replace('#', '?'))
     if (searchParams.has('error') || hashParams.has('error')) {
       supabase.auth.signOut().catch(() => {})
       return
@@ -157,20 +215,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let isActive = true
 
-    const fetchAndSetProfile = async (authToken: string, sbUser: any) => {
-      // Check the short-lived cache first to skip redundant API calls
-      const cached = getCachedProfile()
-      if (cached) {
-        if (isActive) {
-          setUser(cached)
-        }
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        if (!isActive) return
+        setUser(null)
+        applyToken(null)
+        bustProfileCache()
+        localStorage.removeItem(PROFILE_CACHE_KEY)
+        localStorage.removeItem('cached_materials')
         return
       }
 
-      // ── Optimistic render ───────────────────────────────────────────────────
-      // Prefer this user's per-user display cache over Google's OAuth metadata.
-      // Only fall back to Google data on the very first sign-in for this account.
-      if (isActive && sbUser) {
+      // We only need to exchange the token once per new Supabase session.
+      // If we already have our own JWT in state, the session is already exchanged.
+      if (token) return
+
+      try {
+        const result = await authAPI.exchangeSession(session.access_token)
+        if (!isActive) return
+
+        applyToken(result.access_token)
+
+        // Use profile returned by the exchange endpoint directly (saves an extra round-trip)
+        const profile = result.user as UserData
+        if (profile) {
+          setUser(profile)
+          setCachedProfile(profile)
+        } else {
+          await fetchAndApplyProfile(() => isActive)
+        }
+
+        // Optimistic display cache for instant render on next visit
+        if (profile?.id) {
+          const display = getDisplayCache(profile.id)
+          if (!display) {
+            setDisplayCache(profile.id, profile.name, profile.avatar)
+          }
+        }
+      } catch (err) {
+        console.error('Session exchange failed:', err)
+        // Fall back: still let the user appear logged in via Supabase token
+        // (dual-mode backend will still accept it)
+        if (!isActive) return
+        const sbUser = session.user
         const display = getDisplayCache(sbUser.id)
         const optimistic: UserData = {
           id: sbUser.id,
@@ -181,107 +268,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             sbUser.email?.split('@')[0] ||
             'User',
           email: sbUser.email || '',
-          avatar:
-            display?.avatar ??
-            sbUser.user_metadata?.avatar_url,
+          avatar: display?.avatar ?? sbUser.user_metadata?.avatar_url,
         }
         setUser(optimistic)
-        // Only seed the display cache on the very first sign-in for this account.
-        // Never overwrite it with OAuth data — the real DB profile will update it.
+        // Use the Supabase token directly as a fallback — backend dual-mode accepts it
+        applyToken(session.access_token)
         if (!display) {
           setDisplayCache(sbUser.id, optimistic.name, optimistic.avatar)
         }
       }
-
-      try {
-        const res = await authAPI.getProfile()
-        if (res.user && isActive) {
-          // Don't persist a fallback profile — wait for the real one
-          if ((res.user as any)._is_fallback) {
-            setUser(res.user)
-            return
-          }
-          setUser(res.user)
-          setCachedProfile(res.user) // also updates display cache
-        }
-      } catch {
-        // Profile fetch failed — the optimistic value set above is already visible.
-      }
-    }
-
-    const syncSupabaseSession = async () => {
-      try {
-        const { data } = await supabase.auth.getSession()
-        if (!isActive) return
-        const session = data.session
-        if (!session) return
-        const authToken = session.access_token
-        setToken(authToken)
-        localStorage.setItem('auth_token', authToken)
-        await fetchAndSetProfile(authToken, session.user)
-      } catch {
-        // supabase not available — nothing to sync
-      }
-    }
-
-    syncSupabaseSession()
-
-    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        // Do local cleanup only — do NOT call logout() here because logout()
-        setUser(null)
-        setToken(null)
-        localStorage.removeItem('auth_token')
-        localStorage.removeItem(PROFILE_CACHE_KEY)
-        localStorage.removeItem('cached_materials')
-        bustProfileCache()
-        return
-      }
-      if (!session) {
-        setUser(null)
-        setToken(null)
-        localStorage.removeItem('auth_token')
-        localStorage.removeItem('auth_user')
-        localStorage.removeItem('usage_cache')
-        return
-      }
-      const authToken = session.access_token
-      setToken(authToken)
-      localStorage.setItem('auth_token', authToken)
-      fetchAndSetProfile(authToken, session.user)
     })
 
     return () => {
       isActive = false
       listener?.subscription.unsubscribe()
     }
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // intentionally empty — this registers the listener once on mount
+
+  // ── Public API ─────────────────────────────────────────────────────────────
 
   const login = useCallback((userData: UserData, authToken: string) => {
     setUser(userData)
-    setToken(authToken)
-    localStorage.setItem('auth_token', authToken)
-    setCachedProfile(userData) // also updates display cache
-  }, [])
+    applyToken(authToken)
+    setCachedProfile(userData)
+  }, [applyToken])
 
-  const logout = useCallback(() => {
-    supabase.auth.signOut().catch(() => {})
+  const logout = useCallback(async () => {
+    // 1. Revoke refresh token in DB and clear HttpOnly cookie
+    await authAPI.logout()
+    // 2. Clear local state
     setUser(null)
-    setToken(null)
-    localStorage.removeItem('auth_token')
+    applyToken(null)
+    bustProfileCache()
     localStorage.removeItem(PROFILE_CACHE_KEY)
     localStorage.removeItem('cached_materials')
-    bustProfileCache()
-    // NOTE: We intentionally do NOT remove per-user display caches on logout.
-    // Each cache is keyed by user ID (auth_display_<uid>), contains no sensitive data,
-    // and allows each account's name/avatar to appear instantly on next sign-in.
-  }, [])
+    // NOTE: per-user display caches are intentionally kept — no sensitive data,
+    // each is keyed by user ID and provides instant name/avatar on next login.
+  }, [applyToken])
 
   const updateUser = useCallback((data: Partial<UserData>) => {
     setUser(prev => {
       if (!prev) return prev
       const updated = { ...prev, ...data }
-      setCachedProfile(updated) // also updates display cache
+      setCachedProfile(updated)
       bustProfileCache()
       return updated
     })

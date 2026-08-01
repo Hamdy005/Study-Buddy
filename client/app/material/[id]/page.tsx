@@ -267,6 +267,13 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const { user, isLoading: isAuthLoading } = useAuth()
+
+  useEffect(() => {
+    if (!isAuthLoading && !user) {
+      router.replace('/')
+    }
+  }, [user, isAuthLoading, router])
 
   const [material, setMaterial] = useState<Material | null>(null)
   const [isLoading, setIsLoading] = useState(true)

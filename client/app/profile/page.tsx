@@ -44,7 +44,13 @@ import {
 
 export default function ProfilePage() {
   const router = useRouter()
-  const { user, updateUser, logout } = useAuth()
+  const { user, updateUser, logout, isLoading: isAuthLoading } = useAuth()
+
+  useEffect(() => {
+    if (!isAuthLoading && !user) {
+      router.replace('/')
+    }
+  }, [user, isAuthLoading, router])
   const { theme, setTheme: setNextTheme } = useTheme()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isSaving, setIsSaving] = useState(false)

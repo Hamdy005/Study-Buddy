@@ -20,3 +20,20 @@ EMAIL_RATE_LIMITS = {
     "forgot_password": {"limit": 3, "window_seconds": 3600},
     "change_password_confirmation": {"limit": 3, "window_seconds": 3600},
 }
+
+# ── JWT / Access token ────────────────────────────────────────────────────────
+
+# Short-lived JWT lifetime. Stateless: verified via signature only, no DB lookup.
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+
+# ── Refresh token ─────────────────────────────────────────────────────────────
+
+# Long-lived opaque token lifetime. Stateful: looked up in the DB on every use.
+REFRESH_TOKEN_EXPIRE_DAYS = 30
+
+# ── HttpOnly cookie settings ──────────────────────────────────────────────────
+
+REFRESH_COOKIE_NAME    = "refresh_token"
+# Scope the cookie to the auth sub-path so it is NOT sent to /api/materials etc.
+REFRESH_COOKIE_PATH    = "/api/auth"
+REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600  # seconds

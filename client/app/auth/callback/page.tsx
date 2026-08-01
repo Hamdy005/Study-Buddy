@@ -84,7 +84,14 @@ export default function AuthCallbackPage() {
 
       login(userData, session.access_token)
 
-      router.replace('/dashboard')
+      const typeParam = searchParams.get('type') || hashParams.get('type')
+      const nextParam = searchParams.get('next') || hashParams.get('next')
+
+      if (typeParam === 'recovery' || nextParam === '/update-password' || nextParam?.includes('update-password')) {
+        router.replace('/update-password')
+      } else {
+        router.replace('/dashboard')
+      }
     }
 
     handleCallback()

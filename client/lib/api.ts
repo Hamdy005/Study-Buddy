@@ -56,6 +56,23 @@ export interface ChatSession {
   updated_at: string
 }
 
+// ── In-memory token store ─────────────────────────────────────────────────────
+// The access JWT never touches localStorage — it lives only in this module-level
+// variable (and in React state in AuthProvider). On a hard page refresh it is
+// cleared and the AuthProvider silently re-issues it via the refresh cookie.
+
+let _accessToken: string | null = null
+
+export function setApiToken(token: string | null): void {
+  _accessToken = token
+}
+
+export function getApiToken(): string | null {
+  return _accessToken
+}
+
+// ── Header builder ────────────────────────────────────────────────────────────
+
 function buildHeaders(token: string | null): HeadersInit {
   const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
   return {
@@ -68,49 +85,79 @@ function buildHeaders(token: string | null): HeadersInit {
   }
 }
 
-// Force a full sign-out when the refresh token is expired or invalid.
-// Debounced so concurrent 401s from multiple in-flight requests don't
-// each trigger a separate sign-out cascade.
-let _forceSignOutTimer: ReturnType<typeof setTimeout> | null = null
+let _forceSignOutListeners: Array<() => void> = []
+
+export function onForceSignOut(cb: () => void): () => void {
+  _forceSignOutListeners.push(cb)
+  return () => {
+    _forceSignOutListeners = _forceSignOutListeners.filter(fn => fn !== cb)
+  }
+}
+
 function forceSignOut() {
   if (typeof window === 'undefined') return
   if (_forceSignOutTimer) return // already scheduled
-  _forceSignOutTimer = setTimeout(() => {
+  _forceSignOutTimer = setTimeout(async () => {
     _forceSignOutTimer = null
-    localStorage.removeItem('auth_token')
+    // Revoke the refresh token server-side (best-effort)
+    try {
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include', // sends the HttpOnly cookie
+      })
+    } catch { /* ignore network errors during force logout */ }
+    // Clear in-memory token
+    setApiToken(null)
+    // Clear local state
     localStorage.removeItem('auth_user')
     localStorage.removeItem('usage_cache')
     localStorage.removeItem('cached_materials')
-    supabase.auth.signOut().catch(() => {})
+    
+    // Notify listeners (e.g. AuthContext)
+    _forceSignOutListeners.forEach(fn => fn())
+
+    // Sign out of Supabase as well (for Google OAuth sessions)
+    await supabase.auth.signOut().catch(() => {})
+
+    // Redirect to login page
+    if (window.location.pathname !== '/') {
+      window.location.href = '/'
+    }
   }, 100)
 }
 
-// ── Refresh lock ─────────────────────────────────────────────────────────────
-// Multiple concurrent API calls can each receive 401 at roughly the same time.
-// Without a lock, each one calls refreshSession() independently — the first
-// succeeds but the second might race or fail, triggering forceSignOut.
-// This lock ensures only ONE refresh attempt runs; all other 401-handlers
-// wait for the same promise.
+// ── Refresh lock ──────────────────────────────────────────────────────────────
+// Multiple concurrent API calls can each receive 401 at the same time.
+// This lock ensures only ONE refresh attempt runs; all others wait for the
+// same promise result.
+
 let _refreshPromise: Promise<string | null> | null = null
 
-/** Attempt to refresh the Supabase session and return the new access token, or null. */
+/**
+ * Call POST /api/auth/refresh.
+ * The browser automatically sends the HttpOnly refresh-token cookie.
+ * On success, updates the in-memory token store and returns the new JWT.
+ * On failure, returns null (caller should forceSignOut).
+ */
 async function refreshToken(): Promise<string | null> {
   if (_refreshPromise) return _refreshPromise
 
   _refreshPromise = (async () => {
     try {
-      const { data, error } = await supabase.auth.refreshSession()
-      if (error || !data.session) return null
-      const newToken = data.session.access_token
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('auth_token', newToken)
-      }
+      const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include', // sends the HttpOnly refresh cookie
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      const newToken: string | null = data.access_token ?? null
+      if (newToken) setApiToken(newToken)
       return newToken
     } catch {
       return null
     } finally {
-      // Clear lock after a short delay so closely-spaced calls still share
-      // the result, but future calls (e.g. minutes later) get a fresh attempt.
+      // Clear lock after a short delay so closely-spaced calls share the result,
+      // but future calls (e.g. minutes later) get a fresh attempt.
       setTimeout(() => { _refreshPromise = null }, 2000)
     }
   })()
@@ -118,37 +165,37 @@ async function refreshToken(): Promise<string | null> {
   return _refreshPromise
 }
 
+// ── Core fetch wrapper ────────────────────────────────────────────────────────
+
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+  const token = getApiToken()
 
-  // Don't even fire a network request without a token — just throw so the
-  // caller can handle it gracefully (e.g. wait for auth to finish).
+  // Don't fire a network request without a token — let the caller handle it.
   if (!token) {
     throw new Error('Not authenticated')
   }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
+    credentials: 'include', // always include cookies (needed for refresh endpoint)
     headers: { ...buildHeaders(token), ...options.headers },
   })
 
   // ── Token-refresh retry ───────────────────────────────────────────────────
-  // If the server returns 401, the stored JWT is likely expired (e.g. the user
-  // left the tab open overnight).  Ask Supabase to refresh the session and retry
-  // the request once with the new token before surfacing the error.
-  // If the refresh itself fails (refresh token also expired), force a full sign-out.
+  // If the server returns 401 the access token has likely expired.
+  // Call our /api/auth/refresh (cookie sent automatically) and retry once.
   if (response.status === 401) {
     const freshToken = await refreshToken()
     if (freshToken) {
       const retryResponse = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
+        credentials: 'include',
         headers: { ...buildHeaders(freshToken), ...options.headers },
       })
       if (retryResponse.status === 401) {
-        // Refresh token was also invalid — session is fully dead, force logout.
         forceSignOut()
         throw new Error('Session expired. Please sign in again.')
       }
@@ -158,7 +205,6 @@ async function fetchAPI<T>(
       }
       return retryResponse.json()
     }
-    // refreshToken() returned null — refresh token missing or Supabase unreachable.
     forceSignOut()
     throw new Error('Session expired. Please sign in again.')
   }
@@ -172,6 +218,44 @@ async function fetchAPI<T>(
 }
 
 export const authAPI = {
+  /**
+   * Exchange a Supabase JWT for our own short-lived JWT + set HttpOnly refresh cookie.
+   * Call this immediately after any Supabase onAuthStateChange event that provides a session.
+   */
+  exchangeSession: async (supabaseToken: string): Promise<{ access_token: string; token_type: string; user: User }> => {
+    const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
+    const headers: Record<string, string> = {
+      ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
+      ...(!hfToken && { Authorization: `Bearer ${supabaseToken}` }),
+      'X-Auth-Token': supabaseToken,
+    }
+    const res = await fetch(`${API_BASE_URL}/api/auth/session`, {
+      method: 'POST',
+      credentials: 'include', // ensures the Set-Cookie response header is respected
+      headers,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'Session exchange failed' }))
+      throw new Error(err.message || err.detail || 'Session exchange failed')
+    }
+    return res.json()
+  },
+
+  /**
+   * Logout: revoke the refresh token server-side and clear the HttpOnly cookie.
+   * Also signs out of Supabase for Google OAuth users.
+   */
+  logout: async (): Promise<void> => {
+    try {
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+    } catch { /* best-effort */ }
+    setApiToken(null)
+    supabase.auth.signOut().catch(() => {})
+  },
+
   googleAuth: (token: string) =>
     fetchAPI<{ token: string; user: User }>('/api/auth/google', {
       method: 'POST',
@@ -198,11 +282,10 @@ export const authAPI = {
       body: JSON.stringify(data),
     }),
 
-
-  /** Upload an avatar image to Supabase Storage via the backend.
+  /** Upload an avatar image via the backend.
    *  Returns the public URL to save in profiles.avatar_url. */
   uploadAvatar: async (file: File): Promise<{ status: string; avatar_url: string }> => {
-    let token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+    let token = getApiToken()
 
     const makeHeaders = (t: string | null) => {
       const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
@@ -218,6 +301,7 @@ export const authAPI = {
 
     let response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
       method: 'POST',
+      credentials: 'include',
       headers: makeHeaders(token),
       body: formData,
     })
@@ -229,6 +313,7 @@ export const authAPI = {
         token = freshToken
         response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
           method: 'POST',
+          credentials: 'include',
           headers: makeHeaders(token),
           body: formData,
         })
@@ -255,7 +340,7 @@ export const materialsAPI = {
   list: () => fetchAPI<Material[]>('/api/materials'),
 
   uploadPDF: async (file: File): Promise<{ material_id: string; title: string; chunks_count: number }> => {
-    let token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+    let token = getApiToken()
     const formData = new FormData()
     formData.append('file', file)
 
@@ -271,6 +356,7 @@ export const materialsAPI = {
 
     let response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
       method: 'POST',
+      credentials: 'include',
       headers: makeHeaders(token),
       body: formData,
     })
@@ -282,6 +368,7 @@ export const materialsAPI = {
         token = freshToken
         response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
           method: 'POST',
+          credentials: 'include',
           headers: makeHeaders(token),
           body: formData,
         })
@@ -440,7 +527,7 @@ export const asrAPI = {
    * @param language  - 'en' for Parakeet, 'ar' for wav2vec2
    */
   transcribe: async (audioBlob: Blob, language: 'en' | 'ar'): Promise<{ transcript: string }> => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+    const token = getApiToken()
     const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
 
     const formData = new FormData()
@@ -458,6 +545,7 @@ export const asrAPI = {
 
     const response = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
       method: 'POST',
+      credentials: 'include',
       headers,
       body: formData,
     })
@@ -465,9 +553,11 @@ export const asrAPI = {
     if (response.status === 401) {
       const freshToken = await refreshToken()
       if (freshToken) {
-        if (freshToken) headers['X-Auth-Token'] = freshToken
+        headers['X-Auth-Token'] = freshToken
+        if (!hfToken) headers['Authorization'] = `Bearer ${freshToken}`
         const retry = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
           method: 'POST',
+          credentials: 'include',
           headers,
           body: formData,
         })
