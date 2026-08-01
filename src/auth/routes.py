@@ -331,11 +331,17 @@ async def exchange_session(request: Request, response: Response):
     """
     import jwt as pyjwt
 
-    # 1. Extract the Supabase token from the request
+    # 1. Extract the Supabase token from the request.
     headers = {k.lower(): v for k, v in request.headers.items()}
     auth = headers.get("authorization", "")
     x_auth = headers.get("x-auth-token", "")
     raw_supabase_token = x_auth or (auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else None)
+
+    if not raw_supabase_token:
+        content_type = headers.get("content-type", "")
+        if content_type.startswith("text/plain"):
+            body = await request.body()
+            raw_supabase_token = body.decode("utf-8").strip() if body else None
 
     if not raw_supabase_token:
         raise HTTPException(401, "Authorization header with Supabase token required")

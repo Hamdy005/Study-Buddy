@@ -74,13 +74,9 @@ export function getApiToken(): string | null {
 // ── Header builder ────────────────────────────────────────────────────────────
 
 function buildHeaders(token: string | null): HeadersInit {
-  const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
   return {
     'Content-Type': 'application/json',
-    // HF token for private space access goes in standard Authorization header
-    ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-    // User JWT goes in custom header if HF token is present, otherwise fallback to Authorization
-    ...(!hfToken && token && { Authorization: `Bearer ${token}` }),
+    ...(token && { Authorization: `Bearer ${token}` }),
     ...(token && { 'X-Auth-Token': token }),
   }
 }
@@ -144,13 +140,9 @@ async function refreshToken(): Promise<string | null> {
 
   _refreshPromise = (async () => {
     try {
-      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
       const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include', // sends the HttpOnly refresh cookie
-        headers: {
-          ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-        },
       })
       if (!res.ok) return null
       const data = await res.json()
@@ -184,7 +176,7 @@ async function fetchAPI<T>(
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
-    credentials: 'include', // always include cookies (needed for refresh endpoint)
+    credentials: 'omit',
     headers: { ...buildHeaders(token), ...options.headers },
   })
 
@@ -196,7 +188,7 @@ async function fetchAPI<T>(
     if (freshToken) {
       const retryResponse = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
-        credentials: 'include',
+        credentials: 'omit',
         headers: { ...buildHeaders(freshToken), ...options.headers },
       })
       if (retryResponse.status === 401) {
@@ -227,16 +219,11 @@ export const authAPI = {
    * Call this immediately after any Supabase onAuthStateChange event that provides a session.
    */
   exchangeSession: async (supabaseToken: string): Promise<{ access_token: string; token_type: string; user: User }> => {
-    const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
-    const headers: Record<string, string> = {
-      ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-      ...(!hfToken && { Authorization: `Bearer ${supabaseToken}` }),
-      'X-Auth-Token': supabaseToken,
-    }
     const res = await fetch(`${API_BASE_URL}/api/auth/session`, {
       method: 'POST',
       credentials: 'include', // ensures the Set-Cookie response header is respected
-      headers,
+      headers: { 'Content-Type': 'text/plain' },
+      body: supabaseToken,
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: 'Session exchange failed' }))
@@ -292,10 +279,8 @@ export const authAPI = {
     let token = getApiToken()
 
     const makeHeaders = (t: string | null) => {
-      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
       return {
-        ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-        ...(!hfToken && t && { Authorization: `Bearer ${t}` }),
+        ...(t && { Authorization: `Bearer ${t}` }),
         ...(t && { 'X-Auth-Token': t }),
       }
     }
@@ -305,7 +290,7 @@ export const authAPI = {
 
     let response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
       method: 'POST',
-      credentials: 'include',
+      credentials: 'omit',
       headers: makeHeaders(token),
       body: formData,
     })
@@ -317,7 +302,7 @@ export const authAPI = {
         token = freshToken
         response = await fetch(`${API_BASE_URL}/api/auth/upload-avatar`, {
           method: 'POST',
-          credentials: 'include',
+          credentials: 'omit',
           headers: makeHeaders(token),
           body: formData,
         })
@@ -350,17 +335,15 @@ export const materialsAPI = {
 
     // buildHeaders omits 'Content-Type' for FormData so the browser can set the boundary
     const makeHeaders = (t: string | null) => {
-      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
       return {
-        ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-        ...(!hfToken && t && { Authorization: `Bearer ${t}` }),
+        ...(t && { Authorization: `Bearer ${t}` }),
         ...(t && { 'X-Auth-Token': t }),
       }
     }
 
     let response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
       method: 'POST',
-      credentials: 'include',
+      credentials: 'omit',
       headers: makeHeaders(token),
       body: formData,
     })
@@ -372,7 +355,7 @@ export const materialsAPI = {
         token = freshToken
         response = await fetch(`${API_BASE_URL}/api/materials/upload-pdf`, {
           method: 'POST',
-          credentials: 'include',
+          credentials: 'omit',
           headers: makeHeaders(token),
           body: formData,
         })
@@ -532,7 +515,6 @@ export const asrAPI = {
    */
   transcribe: async (audioBlob: Blob, language: 'en' | 'ar'): Promise<{ transcript: string }> => {
     const token = getApiToken()
-    const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
 
     const formData = new FormData()
     formData.append('audio', audioBlob, 'recording.webm')
@@ -540,16 +522,14 @@ export const asrAPI = {
 
     // Build headers without Content-Type (browser sets multipart boundary automatically)
     const headers: Record<string, string> = {}
-    if (hfToken) {
-      headers['Authorization'] = `Bearer ${hfToken}`
-    } else if (token) {
+    if (token) {
       headers['Authorization'] = `Bearer ${token}`
     }
     if (token) headers['X-Auth-Token'] = token
 
     const response = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
       method: 'POST',
-      credentials: 'include',
+      credentials: 'omit',
       headers,
       body: formData,
     })
@@ -558,10 +538,10 @@ export const asrAPI = {
       const freshToken = await refreshToken()
       if (freshToken) {
         headers['X-Auth-Token'] = freshToken
-        if (!hfToken) headers['Authorization'] = `Bearer ${freshToken}`
+        headers['Authorization'] = `Bearer ${freshToken}`
         const retry = await fetch(`${API_BASE_URL}/api/asr/transcribe`, {
           method: 'POST',
-          credentials: 'include',
+          credentials: 'omit',
           headers,
           body: formData,
         })

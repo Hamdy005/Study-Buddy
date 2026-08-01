@@ -149,13 +149,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const trySilentRefresh = async () => {
       try {
         const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
-        const hfToken  = process.env.NEXT_PUBLIC_HF_TOKEN
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: 'POST',
           credentials: 'include', // sends the HttpOnly cookie automatically
-          headers: {
-            ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
-          },
         })
         if (!res.ok) {
           if (active) {
