@@ -91,12 +91,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
 app = FastAPI(
     title="AI Tutor API",
     description="Backend API for the AI Tutor for Students application",
     version="1.0.0",
-    # lifespan=lifespan,
+    lifespan=lifespan,
 )
+
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 @app.middleware("http")
 async def normalize_path(request, call_next):
