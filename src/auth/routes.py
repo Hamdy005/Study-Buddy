@@ -47,12 +47,13 @@ router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
     """Attach the refresh token as an HttpOnly cookie on *response*."""
+    is_prod = settings.environment != "development"
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=raw_token,
         httponly=True,
-        secure=(settings.environment != "development"),
-        samesite="none",   # required for cross-origin Vercel ↔ HF Space
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
         max_age=REFRESH_COOKIE_MAX_AGE,
         path=REFRESH_COOKIE_PATH,
     )
@@ -60,11 +61,12 @@ def _set_refresh_cookie(response: Response, raw_token: str) -> None:
 
 def _clear_refresh_cookie(response: Response) -> None:
     """Remove the refresh token cookie."""
+    is_prod = settings.environment != "development"
     response.delete_cookie(
         key=REFRESH_COOKIE_NAME,
         path=REFRESH_COOKIE_PATH,
-        samesite="none",
-        secure=(settings.environment != "development"),
+        samesite="none" if is_prod else "lax",
+        secure=is_prod,
     )
 
 
