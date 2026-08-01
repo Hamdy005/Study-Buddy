@@ -100,17 +100,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-@app.middleware("http")
-async def normalize_path(request, call_next):
-    # Fix double slashes in paths (e.g., //api/usage -> /api/usage)
-    path = request.scope.get("path")
-    if path and "//" in path:
-        request.scope["path"] = path.replace("//", "/")
-    return await call_next(request)
-
-
 # When allow_credentials=True, browsers REJECT responses with "Access-Control-Allow-Origin: *"
 # and refuse to store or send cookies. We must always use explicit origins.
 _DEFAULT_ORIGINS = [
@@ -120,8 +109,21 @@ _DEFAULT_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:3001",
 ]
-_cors_origins = settings.cors_allowed_origins if settings.cors_allowed_origins else _DEFAULT_ORIGINS
+_raw_origins = settings.cors_allowed_origins if settings.cors_allowed_origins else _DEFAULT_ORIGINS
+# Remove '*' if present to avoid browser credential rejection
+_cors_origins = [o.strip() for o in _raw_origins if o.strip() and o.strip() != "*"] or _DEFAULT_ORIGINS
 
+@app.middleware("http")
+async def normalize_path(request, call_next):
+    # Fix double slashes in paths (e.g., //api/usage -> /api/usage)
+    path = request.scope.get("path")
+    if path and "//" in path:
+        request.scope["path"] = path.replace("//", "/")
+    return await call_next(request)
+
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# CORSMiddleware MUST be added LAST so it becomes the outermost layer in Starlette's middleware stack.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
