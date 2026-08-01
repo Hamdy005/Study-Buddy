@@ -88,27 +88,19 @@ async def get_current_user_id(request: Request) -> str:
         pass
 
     # ── Mode 1b: Supabase JWT stateless fallback (avoids 403 network race) ───
-    try:
-        if settings.supabase_jwt_secret:
+    if settings.supabase_jwt_secret:
+        try:
             payload = pyjwt.decode(
                 token,
                 settings.supabase_jwt_secret,
-                algorithms=["HS256"],
+                algorithms=["HS256", "HS384", "HS512"],
                 options={"verify_aud": False},
             )
-        else:
-            payload = pyjwt.decode(
-                token,
-                options={"verify_signature": False, "verify_aud": False},
-            )
-            exp = payload.get("exp")
-            if exp and time.time() > exp:
-                payload = {}
-        user_id = payload.get("sub")
-        if user_id:
-            return str(user_id)
-    except Exception:
-        pass
+            user_id = payload.get("sub")
+            if user_id:
+                return str(user_id)
+        except Exception:
+            pass
 
     # ── Mode 2: Supabase token (backwards-compat for Google OAuth sessions) ──
     try:
@@ -142,27 +134,19 @@ async def get_current_user(request: Request) -> Any:
         pass
 
     # ── Mode 1b: Supabase JWT stateless fallback ─────────────────────────────
-    try:
-        if settings.supabase_jwt_secret:
+    if settings.supabase_jwt_secret:
+        try:
             payload = pyjwt.decode(
                 token,
                 settings.supabase_jwt_secret,
-                algorithms=["HS256"],
+                algorithms=["HS256", "HS384", "HS512"],
                 options={"verify_aud": False},
             )
-        else:
-            payload = pyjwt.decode(
-                token,
-                options={"verify_signature": False, "verify_aud": False},
-            )
-            exp = payload.get("exp")
-            if exp and time.time() > exp:
-                payload = {}
-        user_id = payload.get("sub")
-        if user_id:
-            return {"id": user_id, "email": payload.get("email", "")}
-    except Exception:
-        pass
+            user_id = payload.get("sub")
+            if user_id:
+                return {"id": str(user_id), "email": payload.get("email", "")}
+        except Exception:
+            pass
 
     # ── Mode 2: Supabase token (backwards compat) ────────────────────────────
     try:

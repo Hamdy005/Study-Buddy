@@ -350,7 +350,7 @@ async def exchange_session(request: Request, response: Response):
             payload = pyjwt.decode(
                 raw_supabase_token,
                 supabase_jwt_secret,
-                algorithms=["HS256"],
+                algorithms=["HS256", "HS384", "HS512"],
                 options={"verify_aud": False},  # Supabase uses 'authenticated' as aud
             )
             user_id = payload.get("sub")
@@ -358,26 +358,8 @@ async def exchange_session(request: Request, response: Response):
             user_metadata = payload.get("user_metadata", {})
         except pyjwt.ExpiredSignatureError:
             raise HTTPException(401, "Supabase token has expired. Please sign in again.")
-        except pyjwt.InvalidTokenError as e:
-            raise HTTPException(401, f"Invalid Supabase token: {e}")
-    else:
-        # Fallback: decode claims without signature verification if secret is not set
-        try:
-            import time
-            payload = pyjwt.decode(
-                raw_supabase_token,
-                options={"verify_signature": False, "verify_aud": False},
-            )
-            exp = payload.get("exp")
-            if exp and time.time() > exp:
-                raise HTTPException(401, "Supabase token has expired. Please sign in again.")
-            user_id = payload.get("sub")
-            email = payload.get("email", "")
-            user_metadata = payload.get("user_metadata", {})
-        except HTTPException:
-            raise
         except Exception:
-            pass
+            pass  # Fall through to Supabase API validation below
 
     # Fallback: validate via Supabase API (slower, but works if unverified decoding failed)
     if not user_id:
