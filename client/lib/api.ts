@@ -144,9 +144,13 @@ async function refreshToken(): Promise<string | null> {
 
   _refreshPromise = (async () => {
     try {
+      const hfToken = process.env.NEXT_PUBLIC_HF_TOKEN
       const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include', // sends the HttpOnly refresh cookie
+        headers: {
+          ...(hfToken && { Authorization: `Bearer ${hfToken}` }),
+        },
       })
       if (!res.ok) return null
       const data = await res.json()
