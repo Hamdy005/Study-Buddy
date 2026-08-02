@@ -50,7 +50,7 @@ Custom authentication workflows (email verification links, password reset tokens
 - Exportable to PDF.
 
 ### 💬 Multi-Session RAG Chatbot
-- Powered by Groq's high-speed **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`).
+- Powered by Mistral AI's **Ministral 8B** (`ministral-8b-latest`).
 - Multi-session conversation management with persistent chat history.
 - Context-aware RAG querying over uploaded PDF/URL chunks.
 - Auto-generated chat titles based on session context.
@@ -73,7 +73,7 @@ Custom authentication workflows (email verification links, password reset tokens
 | **Database & Vector Store** | Supabase | PostgreSQL + `pgvector` |
 | **Cloud Asset Storage** | Cloudinary | CDN-hosted PDF & media uploads |
 | **Transactional Email** | Resend | Signup verification & password reset |
-| **RAG Chatbot Model** | Groq (`llama-3.1-8b-instant`) | High-speed LLM inference |
+| **RAG Chatbot Model** | Mistral AI (`ministral-8b-latest`) | High-performance 8B edge LLM |
 | **Summary Model** | Google Gemini (`gemini-3.5-flash-lite`) | Fallback: `gemini-3.1-flash-lite` |
 | **Quiz Model** | Google Gemini (`gemini-3.5-flash-lite`) | Fallback: `gemini-3.1-flash-lite` |
 | **Text Embeddings** | HuggingFace / SentenceTransformers | `paraphrase-multilingual-MiniLM-L12-v2` |

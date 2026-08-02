@@ -13,7 +13,7 @@ from langchain.memory import ConversationBufferMemory, ConversationBufferWindowM
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 
 from src.config import settings
 from src.database import get_supabase
@@ -137,16 +137,16 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
 # ── LLM ────────────────────────────────────────────────
 
 def get_llm():
-    """RAG Chatbot LLM — strictly uses Groq llama-3.1-8b-instant."""
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY is not configured in config.env. Required for Llama 3.1 RAG chatbot.")
-    logger.info("Initializing RAG Chatbot LLM with Groq model: llama-3.1-8b-instant")
-    return ChatGroq(
-        model="llama-3.1-8b-instant",
-        api_key=groq_key,
+    """RAG Chatbot LLM — strictly uses Mistral AI ministral-8b-latest."""
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if not mistral_key:
+        raise ValueError("MISTRAL_API_KEY is not configured in config.env. Required for Ministral 8B RAG chatbot.")
+    logger.info("Initializing RAG Chatbot LLM with Mistral AI model: ministral-8b-latest")
+    return ChatMistralAI(
+        model="ministral-8b-latest",
+        api_key=mistral_key,
         temperature=0.3,
-        max_tokens=2500,
+        max_tokens=3500,
         timeout=120,
     )
 
@@ -478,7 +478,9 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
             logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
 
-    title = _clean_llm_response(response.content).strip().strip('"').strip("'")
+    raw_title = _clean_llm_response(response.content)
+    # Strip markdown symbols (*, #, _, `, quotes)
+    title = raw_title.replace('*', '').replace('#', '').replace('_', '').replace('`', '').strip().strip('"').strip("'")
     if len(title) > 50:
         title = title[:50].rsplit(' ', 1)[0] + '...'
     return title

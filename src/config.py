@@ -11,7 +11,7 @@ load_dotenv(ENV_PATH)
 
 class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
     # Accept both plain and NEXT_PUBLIC_ prefixed names (config.env uses NEXT_PUBLIC_)
     supabase_url: str = (
         os.getenv("SUPABASE_URL")
@@ -75,8 +75,8 @@ def get_settings() -> Settings:
     s = Settings()
     if s.gemini_api_key:
         os.environ["GEMINI_API_KEY"] = s.gemini_api_key
-    if s.groq_api_key:
-        os.environ["GROQ_API_KEY"] = s.groq_api_key
+    if s.mistral_api_key:
+        os.environ["MISTRAL_API_KEY"] = s.mistral_api_key
     if "TRANSFORMERS_NO_TF" not in os.environ and s.transformers_no_tf:
         os.environ["TRANSFORMERS_NO_TF"] = s.transformers_no_tf
     return s
