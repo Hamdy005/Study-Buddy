@@ -56,11 +56,21 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Run pending Alembic database migrations automatically on server startup
+    try:
+        import subprocess
+        logger.info("Running database migrations via Alembic...")
+        subprocess.run(["alembic", "upgrade", "head"], check=True)
+        logger.info("Database migrations completed successfully.")
+    except Exception as e:
+        logger.warning(f"Database migration step failed or skipped: {e}")
+
     try:
         from src.database import warmup_database
         warmup_database()
     except Exception as e:
         logger.warning(f"Database warmup failed: {e}")
+
 
     try:
         from src.rag.rag import get_embedder

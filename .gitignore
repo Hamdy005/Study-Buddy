@@ -4,6 +4,11 @@ config.env
 logs/
 .streamlit/
 
+# Database / SQLite temporary files
+*.db
+*.sqlite3
+
+
 # Node modules
 client/node_modules/
 

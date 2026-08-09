@@ -29,6 +29,8 @@ class Settings:
         os.getenv("SUPABASE_JWT_SECRET")
         or os.getenv("JWT_SECRET", "")
     )
+    database_url: str = os.getenv("DATABASE_URL", "")
+
     cloudinary_cloud_name: str = (
         os.getenv("CLOUDINARY_CLOUD_NAME")
         or os.getenv("CLOUD_NAME", "")
