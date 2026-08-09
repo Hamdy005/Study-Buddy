@@ -30,6 +30,7 @@ class Settings:
         or os.getenv("JWT_SECRET", "")
     )
     database_url: str = os.getenv("DATABASE_URL", "")
+    redis_url: str    = os.getenv("REDIS_URL", "")
 
     cloudinary_cloud_name: str = (
         os.getenv("CLOUDINARY_CLOUD_NAME")

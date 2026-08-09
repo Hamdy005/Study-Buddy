@@ -16,6 +16,14 @@ DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 2500  # Max chars kept from combined DDG resu
 MEMORY_WINDOW_SIZE = 8                  # Number of previous conversation turns preserved in memory window
 TOP_K_CHUNKS = 4                         # Number of top relevant material chunks retrieved for context
 
+REFUSAL_PREFIXES = (
+    "I can't respond on a gibberish",
+    "I can't respond on a NSFW",
+    "I can't respond on a political",
+    "I can't respond on a religious",
+)
+
+
 RAG_PROMPT_TEMPLATE_BASE = """\
 <role>
 You are a helpful AI study assistant. You provide accurate, well-reasoned educational answers.{subject_line}

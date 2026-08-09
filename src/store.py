@@ -1,11 +1,21 @@
 import os
 import time
+import json
 from httpx import RemoteProtocolError
 from typing import Optional
 import logging
 from datetime import datetime, timezone, date, timedelta
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from src.database import get_supabase
+from src.redis_client import get_redis
+
+# ── Redis Key Prefixes & TTLs ──────────────────────────────────────────────────
+MEMORY_KEY_PREFIX = "mem:"
+MEMORY_REDIS_TTL = 48 * 3600             # 48 hours — keeps active sessions warm
+MEMORY_MAX_MESSAGES = 20                 # Max message history retained in Redis cache (10 turns)
+
+DAILY_RATE_LIMIT_KEY_PREFIX = "rate:"
+DAILY_RATE_LIMIT_REDIS_TTL = 86400       # 24 hours — daily usage counter auto-expiration
 
 def _get_today_date_str() -> str:
     # Shift UTC time by 3 hours to match Egypt timezone (UTC+3), so daily limits reset at 12 AM Egypt time.
@@ -618,44 +628,127 @@ def get_session_messages(session_id: str) -> list[dict]:
     return result.data
 
 
-# ── Conversation Memory (in-memory, ephemeral) ─────────
+# ── Conversation Memory — Redis-backed, Python-dict fallback ─────────────────
 
 import uuid as _uuid
 
+# Fallback in-process dict for when Redis is unavailable
 _memories: dict[str, ConversationBufferMemory] = {}
 
 
-def get_or_create_memory(memory_id: Optional[str] = None, seed_messages: list[dict] | None = None):
-    """Get or create a ConversationBufferMemory, optionally seeding it from DB messages."""
-    if memory_id and memory_id in _memories:
-        return _memories[memory_id], memory_id
-    mid = memory_id or str(_uuid.uuid4())
+def _mem_redis_key(memory_id: str) -> str:
+    return f"{MEMORY_KEY_PREFIX}{memory_id}"
+
+
+def _load_memory_from_messages(messages: list[dict]) -> ConversationBufferWindowMemory:
+    """Build a fresh ConversationBufferWindowMemory from a flat message list."""
     mem = ConversationBufferWindowMemory(
         input_key="input", memory_key="chat_history", return_messages=True, k=5
     )
-    # Rebuild context from stored messages so it survives server restarts
-    if seed_messages:
-        for i in range(0, len(seed_messages) - 1, 2):
-            user_msg = seed_messages[i]
-            ai_msg = seed_messages[i + 1] if i + 1 < len(seed_messages) else None
-            if user_msg.get("role") == "user" and ai_msg and ai_msg.get("role") == "assistant":
-                mem.save_context(
-                    {"input": user_msg["content"]},
-                    {"output": ai_msg["content"]},
-                )
+    for i in range(0, len(messages) - 1, 2):
+        user_msg = messages[i]
+        ai_msg = messages[i + 1] if i + 1 < len(messages) else None
+        if user_msg.get("role") == "user" and ai_msg and ai_msg.get("role") == "assistant":
+            mem.save_context(
+                {"input": user_msg["content"]},
+                {"output": ai_msg["content"]},
+            )
+    return mem
+
+
+def get_or_create_memory(memory_id: Optional[str] = None, seed_messages: list[dict] | None = None):
+    """
+    Get or create a ConversationBufferWindowMemory.
+
+    Redis path (fast):
+        Checks `mem:{memory_id}` in Redis first.  If present, deserialises the
+        cached message list and builds memory from it — no Supabase query needed.
+        TTL is refreshed on each access so active conversations stay warm.
+
+    Fallback path (Supabase seed / in-process dict):
+        Falls back to `seed_messages` from Supabase (as before) and caches the
+        result in Redis so the next call skips Supabase entirely.
+    """
+    mid = memory_id or str(_uuid.uuid4())
+    r = get_redis()
+
+    # ── Redis path ────────────────────────────────────────────────────────────
+    if r is not None:
+        try:
+            rkey = _mem_redis_key(mid)
+            raw = r.get(rkey)
+            if raw:
+                cached_msgs: list[dict] = json.loads(raw)
+                mem = _load_memory_from_messages(cached_msgs)
+                r.expire(rkey, MEMORY_REDIS_TTL)   # refresh TTL on each use
+                return mem, mid
+        except Exception as e:
+            logger.warning("Redis get_or_create_memory read failed: %s", e)
+
+    # ── Seed from DB messages (Supabase / provided list) ─────────────────────
+    source_msgs: list[dict] = seed_messages or []
+    mem = _load_memory_from_messages(source_msgs)
+
+    # Cache in Redis so next request skips Supabase
+    if r is not None and source_msgs:
+        try:
+            rkey = _mem_redis_key(mid)
+            r.set(rkey, json.dumps(source_msgs), ex=MEMORY_REDIS_TTL)
+        except Exception as e:
+            logger.warning("Redis get_or_create_memory write failed: %s", e)
+
+    # Also keep the in-process fallback dict warm
     _memories[mid] = mem
     return mem, mid
+
+
+def append_memory_message(memory_id: str, role: str, content: str) -> None:
+    """
+    Append a single message to the Redis-cached message list for a session.
+
+    Called after each AI turn so Redis stays in sync without a full Supabase
+    round-trip.  Silently no-ops if Redis is unavailable.
+    """
+    r = get_redis()
+    if r is None:
+        return
+    try:
+        rkey = _mem_redis_key(memory_id)
+        raw = r.get(rkey)
+        msgs: list[dict] = json.loads(raw) if raw else []
+        msgs.append({"role": role, "content": content})
+        # Keep only the last N messages to cap memory usage
+        msgs = msgs[-MEMORY_MAX_MESSAGES:]
+        r.set(rkey, json.dumps(msgs), ex=MEMORY_REDIS_TTL)
+    except Exception as e:
+        logger.warning("append_memory_message Redis failed: %s", e)
 
 
 def check_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
     """
     Checks if the user is under the daily limit. Returns True if allowed, False if exceeded.
     Does NOT increment the count.
+
+    Redis path: atomic GET on `rate:{user_id}:{date}` (<5 ms, no Supabase hit).
+    Fallback: existing Supabase profiles query.
     """
     if email and email in ADMIN_EMAILS:
         return True
 
     today = _get_today_date_str()
+
+    # ── Redis path ────────────────────────────────────────────────────────────
+    r = get_redis()
+    if r is not None:
+        try:
+            rkey = f"{DAILY_RATE_LIMIT_KEY_PREFIX}{user_id}:{today}"
+            val = r.get(rkey)
+            count = int(val) if val is not None else 0
+            return count < limit
+        except Exception as e:
+            logger.warning("Redis check_daily_limit failed: %s — falling back to Supabase", e)
+
+    # ── Supabase fallback ─────────────────────────────────────────────────────
     try:
         result = _robust_execute(
             _table_supabase("profiles")
@@ -672,9 +765,7 @@ def check_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20
         count = profile.get("daily_requests", 0) or 0
         if last_date != today:
             count = 0
-        if count >= limit:
-            return False
-        return True
+        return count < limit
     except Exception as e:
         logger.error(f"Rate limit check failed: {e}")
         return True
@@ -683,8 +774,25 @@ def check_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20
 def increment_daily_usage(user_id: str) -> None:
     """
     Increments the daily request count for the user.
+
+    Redis path: atomic INCR + EXPIRE on `rate:{user_id}:{date}` (microseconds).
+    Always also updates Supabase so the dashboard & DB stay in sync.
     """
     today = _get_today_date_str()
+
+    # ── Redis path — atomic INCR ──────────────────────────────────────────────
+    r = get_redis()
+    if r is not None:
+        try:
+            rkey = f"{DAILY_RATE_LIMIT_KEY_PREFIX}{user_id}:{today}"
+            pipe = r.pipeline()
+            pipe.incr(rkey)
+            pipe.expire(rkey, DAILY_RATE_LIMIT_REDIS_TTL)   # auto-expire at next calendar day
+            pipe.execute()
+        except Exception as e:
+            logger.warning("Redis increment_daily_usage failed: %s", e)
+
+    # ── Supabase — keep DB in sync for audit / dashboard ─────────────────────
     try:
         result = _robust_execute(
             _table_supabase("profiles")
@@ -724,8 +832,24 @@ def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, l
 def get_usage(user_id: str) -> dict:
     """
     Returns current usage for a user.
+
+    Redis path: read rate counter directly (<5 ms).
+    Fallback: Supabase profiles query.
     """
     today = _get_today_date_str()
+
+    # ── Redis path ────────────────────────────────────────────────────────────
+    r = get_redis()
+    if r is not None:
+        try:
+            rkey = f"{DAILY_RATE_LIMIT_KEY_PREFIX}{user_id}:{today}"
+            val = r.get(rkey)
+            used = int(val) if val is not None else 0
+            return {"used": used, "limit": 20, "remaining": max(0, 20 - used)}
+        except Exception as e:
+            logger.warning("Redis get_usage failed: %s — falling back to Supabase", e)
+
+    # ── Supabase fallback ─────────────────────────────────────────────────────
     try:
         result = _robust_execute(
             _table_supabase("profiles")

@@ -5,9 +5,10 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, Any
 
 from src.rag.rag import rag_answer, extract_chat_title
+from src.rag.constants import REFUSAL_PREFIXES
 from src.dependencies import get_current_user, get_current_user_id
 from src.store import (
-    get_material, get_chunks, get_summary, get_or_create_memory,
+    get_material, get_chunks, get_summary, get_or_create_memory, append_memory_message,
     # Session-based chat
     create_chat_session, list_chat_sessions, get_chat_session,
     rename_chat_session, delete_chat_session,
@@ -95,13 +96,7 @@ async def ask_tutor(
     elapsed = time.time() - start
 
     # Safety/refusal responses must not be saved to DB history either.
-    _REFUSAL_PREFIXES = (
-        "I can't respond on a gibberish",
-        "I can't respond on a NSFW",
-        "I can't respond on a political",
-        "I can't respond on a religious",
-    )
-    is_refusal = any(cleaned_answer.strip().startswith(p) for p in _REFUSAL_PREFIXES)
+    is_refusal = any(cleaned_answer.strip().startswith(p) for p in REFUSAL_PREFIXES)
 
     # Persist assistant response (only if not a refusal)
     if body.session_id and not is_refusal:
@@ -109,6 +104,11 @@ async def ask_tutor(
             append_session_message(body.session_id, "assistant", cleaned_answer)
         except Exception:
             pass  # don't fail the response if saving fails
+
+    # Keep Redis memory cache in sync (append user + assistant messages)
+    if body.session_id and not is_refusal:
+        append_memory_message(memory_id, "user", body.query.strip())
+        append_memory_message(memory_id, "assistant", cleaned_answer)
 
     return TutorResponse(answer=cleaned_answer, source=source, time_taken=elapsed, memory_id=memory_id)
 
