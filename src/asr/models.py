@@ -16,9 +16,7 @@ Strategy (ported from Raij/src/models.py, hotword biasing removed):
 
 import os
 import threading
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Force PyTorch path, no TensorFlow
 os.environ.setdefault("USE_TF", "0")

@@ -3,7 +3,7 @@ import time
 import json
 from httpx import RemoteProtocolError
 from typing import Optional
-import logging
+from loguru import logger
 from datetime import datetime, timezone, date, timedelta
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from src.database import get_supabase
@@ -36,9 +36,6 @@ ADMIN_EMAILS = set(
     for email in os.environ.get("ADMIN_EMAILS", "").split(",")
     if email.strip()
 )
-
-
-logger = logging.getLogger(__name__)
 
 
 def _get_next_id() -> str:

@@ -1,9 +1,7 @@
-import logging
 from typing import Optional
+from loguru import logger
 from supabase import Client, create_client
 from src.config import settings
-
-logger = logging.getLogger(__name__)
 
 # Singletons — created once, reused on every request
 _supabase_client: Optional[Client] = None

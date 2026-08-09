@@ -12,13 +12,11 @@ Architecture:
 import asyncio
 import time
 import uuid
-import logging
+from loguru import logger
 from typing import Any
 
 from .constants import BATCH_MAX_SIZE, BATCH_WINDOW_S, WARMUP_INTERVAL_S
 from .schemas import EmbeddingJob
-
-logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════ Job Store ════════════════════════

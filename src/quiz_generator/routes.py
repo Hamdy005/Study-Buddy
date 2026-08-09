@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from loguru import logger
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from src.quiz_generator.quiz import smart_quiz_generator
@@ -13,8 +13,6 @@ from .constants import (
     MIN_TF_COUNT,
     MAX_TF_COUNT,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/quiz", tags=["Quiz"])
 

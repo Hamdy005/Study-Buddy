@@ -1,7 +1,7 @@
 import os
 import asyncio
 import uuid
-import logging
+from loguru import logger
 from functools import lru_cache
 from typing import Optional
 from langchain_community.tools import DuckDuckGoSearchResults
@@ -30,8 +30,6 @@ from .constants import (
     TOP_K_CHUNKS,
 )
 from .schemas import EmbeddingJob
-
-logger = logging.getLogger(__name__)
 
 
 # ── Embeddings ─────────────────────────────────────────

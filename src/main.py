@@ -1,5 +1,3 @@
-import logging
-import logging.handlers
 import os
 import sys
 
@@ -7,6 +5,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+
+from src.logger import setup_logging, logger
+setup_logging()
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
@@ -21,38 +22,7 @@ from src.auth.routes import router as auth_router
 from src.asr.routes import router as asr_router
 from src.store import get_usage
 from src.dependencies import get_current_user_id
-from src.config import settings 
-
-# ── Logging Setup ──────────────────────────────────────
-os.makedirs("logs", exist_ok=True)
-
-log_formatter = logging.Formatter(
-    "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-
-# File handler — rotates at 5MB, keeps 3 backups
-file_handler = logging.handlers.RotatingFileHandler(
-    "logs/app.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-)
-file_handler.setFormatter(log_formatter)
-
-# Console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_formatter)
-
-# Apply to root logger so all src.* modules inherit it
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
-root_logger.addHandler(console_handler)
-
-# Suppress noisy watchfiles reload logs
-logging.getLogger("watchfiles").setLevel(logging.WARNING)
-logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
-
-logger = logging.getLogger(__name__)
-
+from src.config import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,24 +49,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Embedder failed to load: {e}")
 
-    # # Eagerly load ASR models so warmup runs at startup, not on first request
-    # try:
-    #     from src.asr.models import get_audio_model_en
-    #     get_audio_model_en()
-    # except Exception as e:
-    #     logger.warning(f"English ASR model failed to load: {e}")
+    # Eagerly load ASR models so warmup runs at startup, not on first request
+    try:
+        from src.asr.models import get_audio_model_en
+        get_audio_model_en()
+    except Exception as e:
+        logger.warning(f"English ASR model failed to load: {e}")
 
-    # try:
-    #     from src.asr.models import get_audio_model_ar
-    #     get_audio_model_ar()
-    # except Exception as e:
-    #     logger.warning(f"Arabic ASR model failed to load: {e}")
+    try:
+        from src.asr.models import get_audio_model_ar
+        get_audio_model_ar()
+    except Exception as e:
+        logger.warning(f"Arabic ASR model failed to load: {e}")
 
-    # from src.rag.batch_workers import start_workers
-    # start_workers()
+    from src.rag.batch_workers import start_workers
+    start_workers()
 
-    # from src.asr.batch_workers import start_asr_workers
-    # start_asr_workers()
+    from src.asr.batch_workers import start_asr_workers
+    start_asr_workers()
 
     yield
 
@@ -125,12 +95,28 @@ _raw_origins = settings.cors_allowed_origins if settings.cors_allowed_origins el
 _cors_origins = [o.strip() for o in _raw_origins if o.strip() and o.strip() != "*"] or _DEFAULT_ORIGINS
 
 @app.middleware("http")
-async def normalize_path(request, call_next):
+async def log_request_timing(request, call_next):
+    import time
+    start = time.perf_counter()
     # Fix double slashes in paths (e.g., //api/usage -> /api/usage)
     path = request.scope.get("path")
     if path and "//" in path:
         request.scope["path"] = path.replace("//", "/")
-    return await call_next(request)
+    response = await call_next(request)
+    duration_sec = time.perf_counter() - start
+
+    status = response.status_code
+    if 200 <= status < 300:
+        status_str = f"<green>{status}</green>"
+    elif 300 <= status < 400:
+        status_str = f"<cyan>{status}</cyan>"
+    elif 400 <= status < 500:
+        status_str = f"<red>{status}</red>"
+    else:
+        status_str = f"<bold><red>{status}</red></bold>"
+
+    logger.opt(colors=True).info(f"{request.method} {request.url.path} - {status_str} ({duration_sec:.2f}s)")
+    return response
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 

@@ -1,6 +1,6 @@
 import asyncio
 import time
-import logging 
+from loguru import logger
 from fastapi import APIRouter, HTTPException, Depends
 
 from src.summary_generator.summary import summarizer, web_summarizer, fetch_web_content
@@ -17,7 +17,6 @@ from .schemas import SummarizeRequest, SummarizeResponse
 from .constants import MAX_COMBINED_TEXT_LEN
 
 router = APIRouter(prefix="/api/materials", tags=["Summarizer"])
-logger = logging.getLogger(__name__)
 
 
 @router.post("/summarize", response_model=SummarizeResponse)

@@ -1,6 +1,6 @@
 import time
 import asyncio
-import logging
+from loguru import logger
 import validators
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks, Header, Request
 from postgrest.exceptions import APIError
@@ -12,8 +12,6 @@ from src.dependencies import get_current_user_id, get_current_user
 from src.database import get_supabase, get_auth_supabase
 from .constants import ALLOWED_TYPES, MAX_SIZE_MB, MAX_SIZE_BYTES
 from .schemas import URLInput, RenameMaterialRequest, BulkDeleteRequest, TopicRequest, SearchRequest
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/materials", tags=["Materials"])
 

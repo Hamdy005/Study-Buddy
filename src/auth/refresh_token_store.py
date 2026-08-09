@@ -34,7 +34,7 @@ Table DDL (run once in the Supabase SQL editor):
     CREATE INDEX ON refresh_tokens(user_id);
 """
 
-import logging
+from loguru import logger
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -46,8 +46,6 @@ from src.auth.constants import (
     REFRESH_TOKEN_REDIS_TTL,
 )
 from src.redis_client import get_redis
-
-logger = logging.getLogger(__name__)
 
 
 def _rt_key(token_hash: str) -> str:

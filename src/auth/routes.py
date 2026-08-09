@@ -1,13 +1,11 @@
 import uuid
-import logging
+from loguru import logger
 import cloudinary
 import cloudinary.uploader
 from datetime import timezone, datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Request
 from fastapi import Depends
 from typing import Optional
-
-logger = logging.getLogger(__name__)
 
 from src.config import settings
 from src.database import get_auth_supabase, get_supabase

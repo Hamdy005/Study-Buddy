@@ -1,7 +1,7 @@
 import json
 import random
 import re
-import logging
+from loguru import logger
 from typing import Optional
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.tools import create_retriever_tool
@@ -17,8 +17,6 @@ from .constants import (
     ARXIV_TOP_K_RESULTS,
     ARXIV_DOC_CONTENT_CHARS_MAX,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def _quiz_prompt():

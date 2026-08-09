@@ -1,9 +1,7 @@
 import re
-import logging
+from loguru import logger
 from src.rag.rag import get_llm
 from src.config import settings
-
-logger = logging.getLogger(__name__)
 
 # Load English NSFW word list from config settings (kept out of committed code)
 LOCAL_NSFW_WORDS = set(settings.local_nsfw_words)

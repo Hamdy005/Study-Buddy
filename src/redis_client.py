@@ -8,12 +8,10 @@ do a simple `r = get_redis(); if r is None: <fallback>` without crashing.
 Connection is created once and reused for the lifetime of the process.
 """
 
-import logging
 from typing import Optional
+from loguru import logger
 
 import redis
-
-logger = logging.getLogger(__name__)
 
 _redis_client: Optional[redis.Redis] = None
 _redis_available: bool = False
@@ -54,6 +52,6 @@ def get_redis() -> Optional[redis.Redis]:
         logger.info("Redis connected successfully.")
         return _redis_client
     except Exception as e:
-        logger.warning("Redis connection failed (%s) — falling back to Supabase/in-memory.", e)
+        logger.warning(f"Redis connection failed ({e}) — falling back to Supabase/in-memory.")
         _redis_available = False
         return None

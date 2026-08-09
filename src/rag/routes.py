@@ -1,6 +1,6 @@
 import time
 import asyncio
-import logging
+from loguru import logger
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, Any
 
@@ -19,8 +19,6 @@ from src.store import (
 )
 from src.summary_generator.summary import clean_summary
 from .schemas import TutorQuery, TutorResponse, SessionRequest, RenameSessionRequest, ExtractTitleRequest, SaveChatRequest
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tutor", tags=["Tutor"])
 

@@ -1,5 +1,5 @@
 import re
-import logging
+from loguru import logger
 import concurrent.futures
 from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
 from src.rag.rag import get_summary_llm, get_summary_fallback_llm
@@ -10,8 +10,6 @@ from .constants import (
     WIKI_TOP_K_RESULTS,
     WIKI_DOC_CONTENT_CHARS_MAX,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def summarizer_prompt():

@@ -2,15 +2,13 @@ import asyncio
 import os
 import tempfile
 import uuid
-import logging
+from loguru import logger
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
 from src.dependencies import get_current_user_id
 from src.asr.schemas import AudioJob
 from src.asr.batch_workers import audio_en_queue, audio_ar_queue, job_store
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/asr", tags=["ASR"])
 

@@ -15,13 +15,11 @@ Architecture (mirrors Raij/src/smart_search/batch_workers.py, audio workers only
 import asyncio
 import time
 import uuid
-import logging
+from loguru import logger
 from typing import Any
 
 from .constants import ASR_BATCH_MAX, ASR_BATCH_WINDOW_S, WARMUP_INTERVAL_S, PARAKEET_WARMUP_EVERY
 from .schemas import AudioJob
-
-logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════ Job Store ════════════════════════
