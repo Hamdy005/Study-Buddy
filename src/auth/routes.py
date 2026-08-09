@@ -3,7 +3,7 @@ from loguru import logger
 import cloudinary
 import cloudinary.uploader
 from datetime import timezone, datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Request, BackgroundTasks
 from fastapi import Depends
 from typing import Optional
 
@@ -401,7 +401,7 @@ async def exchange_session(request: Request, response: Response):
     access_token  = create_access_token(user_id, email)
     raw_refresh   = create_refresh_token()
     refresh_hash  = hash_token(raw_refresh)
-    save_refresh_token(user_id, refresh_hash)
+    save_refresh_token(user_id, refresh_hash, email=email)
 
     _set_refresh_cookie(response, raw_refresh)
 
@@ -413,7 +413,7 @@ async def exchange_session(request: Request, response: Response):
 
 
 @router.post("/refresh")
-async def refresh_session(request: Request, response: Response):
+async def refresh_session(request: Request, response: Response, background_tasks: BackgroundTasks):
     """
     Silently re-issue a new access token using the HttpOnly refresh token cookie.
 
@@ -439,16 +439,18 @@ async def refresh_session(request: Request, response: Response):
         raise HTTPException(401, "Refresh token is invalid, expired, or revoked")
 
     user_id = str(row["user_id"])
+    email = row.get("email")
 
-    # Fetch the user's email for the new access token payload
-    profile = get_user_by_id(user_id)
-    email = (profile or {}).get("email", "")
+    # Fall back to DB lookup only if email wasn't cached in Redis
+    if not email:
+        profile = get_user_by_id(user_id)
+        email = (profile or {}).get("email", "")
 
-    # Rotate: revoke old, issue new refresh token
-    revoke_refresh_token(token_hash)
+    # Rotate: revoke old, issue new refresh token (background audit writes keep response <15ms)
+    revoke_refresh_token(token_hash, background_tasks=background_tasks)
     new_raw_refresh = create_refresh_token()
     new_hash        = hash_token(new_raw_refresh)
-    save_refresh_token(user_id, new_hash)
+    save_refresh_token(user_id, new_hash, email=email, background_tasks=background_tasks)
 
     access_token = create_access_token(user_id, email)
 
