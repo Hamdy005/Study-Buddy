@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 
 from src.materials.routes import router as materials_router
 from src.summary_generator.routes import router as summary_router
-from src.rag.routes import router as tutor_router
+from src.rag.routes import router as tutor_router, ws_router
 from src.quiz_generator.routes import router as quiz_router
 from src.auth.routes import router as auth_router
 from src.asr.routes import router as asr_router
@@ -132,6 +132,7 @@ app.add_middleware(
 app.include_router(materials_router)
 app.include_router(summary_router)
 app.include_router(tutor_router)
+app.include_router(ws_router)
 app.include_router(quiz_router)
 app.include_router(auth_router)
 app.include_router(asr_router)

@@ -2,6 +2,19 @@ import { supabase } from '@/lib/supabase'
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '')
 
+export function getWebSocketUrl(path: string): string {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  if (API_BASE_URL) {
+    const wsUrl = API_BASE_URL.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+    return `${wsUrl}${cleanPath}`
+  }
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}${cleanPath}`
+  }
+  return `ws://localhost:8000${cleanPath}`
+}
+
 export interface User {
   id: string
   name: string

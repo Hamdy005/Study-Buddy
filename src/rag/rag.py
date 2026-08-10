@@ -450,6 +450,141 @@ def rag_answer(
             logger.error(f"Fallback LLM call also failed: {fallback_err}")
             raise fallback_err
 
+
+async def rag_answer_stream(
+    query: str,
+    material_id: Optional[str] = None,
+    chunks: Optional[list[str]] = None,
+    summaries: str = "",
+    memory = None,
+):
+    """
+    Async generator that streams LLM response tokens using Mistral AI (with Gemini fallback).
+    Yields individual token strings as they arrive.
+    Updates conversation memory upon completion if not a refusal.
+    """
+    if memory is None:
+        memory = ConversationBufferWindowMemory(
+            input_key="input", memory_key="chat_history", return_messages=True, k=MEMORY_WINDOW_SIZE
+        )
+
+    # Fetch material info if material_id is provided
+    mat = None
+    if material_id:
+        mat = await asyncio.to_thread(get_material, material_id)
+
+    is_topic = not (material_id and mat and mat.get("source_type") != "topic")
+
+    context_parts = []
+    has_chunks = False
+
+    # Inject Subject/Topic
+    if mat and mat.get("title"):
+        context_parts.append(f"Subject / Topic: {mat.get('title')}")
+
+    if not is_topic:
+        # --- Material-based query (PDF/URL): vector similarity search ---
+        results = await asyncio.to_thread(similarity_search, query, material_id, k=TOP_K_CHUNKS)
+        if results:
+            has_chunks = True
+            chunks = [r["content"] for r in results]
+            context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
+
+        # Fallback: summary
+        if not has_chunks and summaries:
+            context_parts.append(f"Material Summary (No specific excerpts found for your query):\n{summaries}")
+
+        # Fallback: sample head + tail chunks
+        if not has_chunks and not summaries:
+            all_chunks = await asyncio.to_thread(get_chunks, material_id)
+            if all_chunks:
+                head = all_chunks[:3]
+                tail = all_chunks[-2:] if len(all_chunks) > 3 else []
+                sampled = head + [c for c in tail if c not in head]
+                sampled_text = "\n---\n".join(c["content"] for c in sampled)
+                context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
+
+    # --- Wikipedia search: topics only ---
+    wiki_snippets = ""
+    if is_topic:
+        wiki_snippets = await asyncio.to_thread(direct_wiki_search, query)
+        if wiki_snippets:
+            context_parts.append(f"Wikipedia Results:\n{wiki_snippets}")
+
+    # --- DuckDuckGo search: ALL material types (topics, PDFs, URLs) ---
+    subject_title = mat.get("title") if mat and mat.get("title") else ""
+    ddg_query = f"{query} {subject_title}".strip() if subject_title else query
+    ddg_snippets = await asyncio.to_thread(direct_ddg_search, ddg_query)
+    if ddg_snippets:
+        context_parts.append(f"Web Search Results (DuckDuckGo):\n{ddg_snippets}")
+
+    context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
+
+    has_knowledge = not is_topic
+    subject_title = mat.get("title") if mat and mat.get("title") else ""
+    prompt = _rag_prompt(
+        has_ddg=bool(ddg_snippets),
+        has_wiki=bool(wiki_snippets),
+        has_knowledge_retriever=has_knowledge,
+        subject=subject_title,
+    )
+
+    _REFUSAL_PREFIXES = (
+        "I can't respond on a gibberish",
+        "I can't respond on a NSFW",
+        "I can't respond on a political",
+        "I can't respond on a religious",
+    )
+
+    def _is_refusal(text: str) -> bool:
+        t = text.strip()
+        return any(t.startswith(p) for p in _REFUSAL_PREFIXES)
+
+    memory_vars = memory.load_memory_variables({"input": query})
+    chat_history = memory_vars.get("chat_history", [])
+
+    full_answer_parts = []
+
+    try:
+        primary_llm = get_llm()
+        chain = prompt | primary_llm
+
+        async for chunk in chain.astream({
+            "input": query,
+            "context": context_str,
+            "chat_history": chat_history,
+            "agent_scratchpad": "",
+        }):
+            token = _clean_llm_response(chunk.content)
+            if token:
+                full_answer_parts.append(token)
+                yield token
+
+    except Exception as e:
+        logger.warning(f"Primary LLM streaming failed or rate-limited: {e}. Falling back to secondary LLM.")
+        try:
+            fallback_llm = get_fallback_llm()
+            chain = prompt | fallback_llm
+
+            async for chunk in chain.astream({
+                "input": query,
+                "context": context_str,
+                "chat_history": chat_history,
+                "agent_scratchpad": "",
+            }):
+                token = _clean_llm_response(chunk.content)
+                if token:
+                    full_answer_parts.append(token)
+                    yield token
+        except Exception as fallback_err:
+            logger.error(f"Fallback LLM streaming failed: {fallback_err}")
+            raise fallback_err
+
+    full_answer = "".join(full_answer_parts)
+    if not _is_refusal(full_answer):
+        memory.save_context({"input": query}, {"output": full_answer})
+
+
 def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     topic_context = ""
     if material_title:

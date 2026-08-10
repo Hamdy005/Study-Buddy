@@ -65,7 +65,7 @@ import { Separator } from '@/components/ui/separator'
 import { UserDropdown } from '@/components/user-dropdown'
 import { UsageStats } from '@/components/usage-stats'
 import { useAuth } from '@/contexts/auth-context'
-import { materialsAPI, tutorAPI, quizAPI, usageAPI, asrAPI } from '@/lib/api'
+import { materialsAPI, tutorAPI, quizAPI, usageAPI, asrAPI, getWebSocketUrl, getApiToken } from '@/lib/api'
 import type { Material, ChatMessage, QuizQuestion, QuizResult, ChatSession } from '@/lib/api'
 
 function formatInlineMd(raw: string): string {
@@ -934,6 +934,8 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [wsFallback, setWsFallback] = useState(false)
   const [isSessionsLoading, setIsSessionsLoading] = useState(true)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -949,12 +951,69 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const lastUserMessageRef = useRef<HTMLDivElement | null>(null)
   const shouldScrollToUserRef = useRef(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
   const isMounted = useRef(true)
 
   useEffect(() => {
     isMounted.current = true
-    return () => { isMounted.current = false }
+    return () => {
+      isMounted.current = false
+      if (wsRef.current) {
+        try { wsRef.current.close() } catch {}
+        wsRef.current = null
+      }
+    }
   }, [])
+
+  const getOrConnectWebSocket = async (): Promise<WebSocket> => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      return wsRef.current
+    }
+    if (wsRef.current) {
+      try { wsRef.current.close() } catch {}
+      wsRef.current = null
+    }
+
+    const token = getApiToken()
+    const url = getWebSocketUrl('/ws/chat')
+
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url)
+      let authTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        try { ws.close() } catch {}
+        reject(new Error('Auth handshake timeout'))
+      }, 8000)
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'auth', token }))
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'auth_ok') {
+            if (authTimeout) clearTimeout(authTimeout)
+            authTimeout = null
+            wsRef.current = ws
+            resolve(ws)
+          }
+        } catch {
+          if (authTimeout) clearTimeout(authTimeout)
+          reject(new Error('Invalid handshake response'))
+        }
+      }
+
+      ws.onerror = (err) => {
+        if (authTimeout) clearTimeout(authTimeout)
+        reject(err)
+      }
+
+      ws.onclose = () => {
+        if (authTimeout) clearTimeout(authTimeout)
+        if (wsRef.current === ws) wsRef.current = null
+      }
+    })
+  }
 
   const startChatPoller = (sid: string) => {
     if (pollingRef.current) return
@@ -962,8 +1021,10 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       try {
         const data = await tutorAPI.getSessionMessages(sid)
         const formatted: ChatMessage[] = data.map((m: any) => ({
-          role: m.role,
-          content: m.content
+          id: m.id || Math.random().toString(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: m.created_at || new Date().toISOString()
         }))
 
         // If the last message is from assistant, we are done
@@ -1030,8 +1091,10 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         try {
           const data = await tutorAPI.getSessionMessages(sid)
           const formatted: ChatMessage[] = data.map((m: any) => ({
-            role: m.role,
-            content: m.content
+            id: m.id || Math.random().toString(),
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: m.created_at || new Date().toISOString()
           }))
 
           if (isMounted.current) {
@@ -1136,34 +1199,126 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
     const currentInput = input.trim()
     setInput('')
-    setMessages((prev) => [...prev, { role: 'user', content: currentInput }])
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now().toString(), role: 'user', content: currentInput, timestamp: new Date().toISOString() },
+    ])
     setIsLoading(true)
-    localStorage.setItem(`waiting_chat_${sessionId}`, 'true')
-    startChatPoller(sessionId) // Start polling in case we navigate away
     shouldScrollToUserRef.current = true
 
-    try {
-      const data = await tutorAPI.ask(currentInput, sourceType, materialId, sessionId!)
-      if (isMounted.current && currentSessionId === sessionId) {
-        setMessages((prev) => [...prev, { role: 'assistant', content: data.answer }])
+    // Attempt WebSocket connection with exponential back-off retries
+    let ws: WebSocket | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        ws = await getOrConnectWebSocket()
+        if (ws && ws.readyState === WebSocket.OPEN) break
+      } catch (err) {
+        console.warn(`WebSocket connection attempt ${attempt + 1} failed:`, err)
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
+      }
+    }
 
-        if (sessions.find(s => s.id === sessionId)?.title === 'Untitled Chat') {
-          try {
-            const titleData = await tutorAPI.extractTitle(sessionId!, currentInput)
-            setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, title: titleData.title } : s))
-          } catch { }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      setWsFallback(false)
+      setIsStreaming(true)
+
+      // Append initial assistant message for live streaming
+      setMessages((prev) => [
+        ...prev,
+        { id: (Date.now() + 1).toString(), role: 'assistant', content: '', timestamp: new Date().toISOString() },
+      ])
+
+      ws.onmessage = (event) => {
+        const chunk = event.data
+
+        if (chunk === '[DONE]') {
+          if (isMounted.current) {
+            setIsStreaming(false)
+            setIsLoading(false)
+
+            if (sessions.find((s) => s.id === sessionId)?.title === 'Untitled Chat') {
+              tutorAPI
+                .extractTitle(sessionId!, currentInput)
+                .then((titleData) => {
+                  if (isMounted.current) {
+                    setSessions((prev) =>
+                      prev.map((s) => (s.id === sessionId ? { ...s, title: titleData.title } : s))
+                    )
+                  }
+                })
+                .catch(() => {})
+            }
+          }
+          return
+        }
+
+        try {
+          const parsed = JSON.parse(chunk)
+          if (parsed.type === 'error') {
+            if (isMounted.current) {
+              toast.error(parsed.message || 'Error generating response')
+              setIsStreaming(false)
+              setIsLoading(false)
+            }
+            return
+          }
+        } catch {}
+
+        if (isMounted.current) {
+          setMessages((prev) => {
+            if (prev.length === 0) return prev
+            const lastIndex = prev.length - 1
+            if (prev[lastIndex].role !== 'assistant') return prev
+            const updated = [...prev]
+            updated[lastIndex] = {
+              ...updated[lastIndex],
+              content: updated[lastIndex].content + chunk,
+            }
+            return updated
+          })
         }
       }
-    } catch {
-      if (isMounted.current) toast.error('Failed to get response')
-    } finally {
-      if (isMounted.current) {
-        setIsLoading(false)
-        localStorage.removeItem(`waiting_chat_${sessionId}`)
-        if (pollingRef.current) {
-          clearInterval(pollingRef.current)
-          pollingRef.current = null
+
+      ws.onerror = (err) => {
+        console.error('WS error during streaming:', err)
+        if (isMounted.current) {
+          setIsStreaming(false)
+          setIsLoading(false)
         }
+      }
+
+      ws.send(
+        JSON.stringify({
+          query: currentInput,
+          material_id: materialId,
+          session_id: sessionId,
+          source_type: sourceType,
+        })
+      )
+    } else {
+      // Fall back to HTTP POST /api/tutor/ask if WS is unavailable
+      setWsFallback(true)
+      try {
+        const data = await tutorAPI.ask(currentInput, sourceType, materialId, sessionId!)
+        if (isMounted.current && currentSessionId === sessionId) {
+          setMessages((prev) => [
+            ...prev,
+            { id: Date.now().toString(), role: 'assistant', content: data.answer, timestamp: new Date().toISOString() },
+          ])
+
+          if (sessions.find((s) => s.id === sessionId)?.title === 'Untitled Chat') {
+            try {
+              const titleData = await tutorAPI.extractTitle(sessionId!, currentInput)
+              setSessions((prev) =>
+                prev.map((s) => (s.id === sessionId ? { ...s, title: titleData.title } : s))
+              )
+            } catch {}
+          }
+        }
+      } catch {
+        if (isMounted.current) toast.error('Failed to get response')
+      } finally {
+        if (isMounted.current) setIsLoading(false)
       }
     }
   }
@@ -1225,45 +1380,98 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   return (
     <div className="h-[750px] flex flex-col overflow-hidden border border-border/50 dark:border-white/[0.06] shadow-sm bg-card rounded-xl">
       {/* Header */}
-      <div className="px-4 border-b border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] h-20 flex items-center justify-between shrink-0 group">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="px-3 md:px-4 border-b border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] h-20 flex items-center justify-between shrink-0 group">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 mr-2">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="h-8 w-8 p-0 hidden md:flex flex-shrink-0 hover:bg-muted"
+            className="h-8 w-8 p-0 flex flex-shrink-0 hover:bg-muted"
             title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
           >
             {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
           </Button>
-          <Badge variant="secondary" className="bg-primary/10 text-primary text-[10px] h-5 flex-shrink-0 px-2 font-bold">LIVE</Badge>
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="text-base font-semibold truncate text-foreground">
-              {(sessions.find(s => s.id === currentSessionId)?.title || 'Untitled Chat').slice(0, 50)}
-            </span>
+
+          <Badge variant="secondary" className="bg-primary/10 text-primary text-[10px] h-5 flex-shrink-0 px-1.5 md:px-2 font-bold">LIVE</Badge>
+          {wsFallback && (
+            <Badge variant="outline" className="text-[10px] h-5 px-1.5 md:px-2 text-amber-500 border-amber-500/30 bg-amber-500/10 flex-shrink-0">
+              ⚡ HTTP Fallback
+            </Badge>
+          )}
+
+          {/* Session Picker Dropdown / Title */}
+          <div className="flex items-center gap-1 min-w-0 flex-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-1 min-w-0 hover:bg-muted/60 px-2 py-1 rounded-lg transition-colors text-left max-w-full group/title">
+                  <span className="text-sm md:text-base font-semibold truncate text-foreground">
+                    {(sessions.find(s => s.id === currentSessionId)?.title || 'Untitled Chat').slice(0, 50)}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover/title:text-foreground shrink-0" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto z-50">
+                <div className="p-1">
+                  <DropdownMenuItem
+                    onClick={createNewSession}
+                    disabled={isCreatingSession}
+                    className="cursor-pointer font-medium text-primary flex items-center gap-2"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New Chat
+                  </DropdownMenuItem>
+                </div>
+                <Separator className="my-1" />
+                {isSessionsLoading ? (
+                  <div className="flex justify-center py-3">
+                    <Loader2 className="animate-spin h-4 w-4 text-muted-foreground" />
+                  </div>
+                ) : (
+                  sessions.map((s) => (
+                    <DropdownMenuItem
+                      key={s.id}
+                      onClick={() => {
+                        setCurrentSessionId(s.id)
+                        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                          setSidebarOpen(false)
+                        }
+                      }}
+                      className={`cursor-pointer flex items-center justify-between gap-2 py-2 ${s.id === currentSessionId ? 'font-semibold text-primary bg-primary/10' : ''}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate text-xs md:text-sm">{s.title || 'Untitled Chat'}</span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             {currentSessionId && (
-              <>
+              <div className="flex items-center gap-0.5 shrink-0">
                 <button
                   onClick={() => {
                     const s = sessions.find(s => s.id === currentSessionId)
                     if (s) { setRenamingSessionId(s.id); setRenameSessionInput(s.title) }
                   }}
-                  className="p-1 rounded-lg hover:bg-muted transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                  className="p-1 rounded-lg hover:bg-muted transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   title="Rename session"
                 >
                   <Pencil className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
                 <button
                   onClick={(e) => deleteSession(currentSessionId, e as any)}
-                  className="p-1 rounded-lg hover:bg-destructive/10 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                  className="p-1 rounded-lg hover:bg-destructive/10 transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   title="Delete session"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
                 </button>
-              </>
+              </div>
             )}
           </div>
         </div>
+
         <div className="flex items-center gap-2 flex-shrink-0">
           <Button variant="ghost" size="sm" onClick={handleExportPDF} disabled={messages.length === 0} className="h-9 w-9 p-0 hover:bg-muted">
             <Printer className="h-5 w-5" />
@@ -1272,19 +1480,40 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       </div>
 
       {/* Body */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Sidebar */}
+      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+        {/* Mobile Backdrop Overlay */}
         {sidebarOpen && (
-          <div className="hidden md:flex flex-col w-60 border-r border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] min-h-0">
-            <div className="p-4 border-b">
+          <div
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 bg-black/40 z-20 md:hidden"
+          />
+        )}
+
+        {/* Sidebar (Desktop Side Panel + Mobile Drawer) */}
+        {sidebarOpen && (
+          <div className="absolute md:relative inset-y-0 left-0 z-30 w-72 md:w-60 flex flex-col border-r border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] min-h-0 shadow-2xl md:shadow-none">
+            <div className="p-4 border-b flex items-center justify-between gap-2">
               <Button
-                onClick={createNewSession}
+                onClick={() => {
+                  createNewSession()
+                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setSidebarOpen(false)
+                  }
+                }}
                 className="w-full justify-start gap-2 bg-background hover:bg-muted transition-colors"
                 variant="outline"
                 disabled={isCreatingSession}
               >
                 <Plus className="h-4 w-4" />
                 New Chat
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSidebarOpen(false)}
+                className="h-8 w-8 p-0 md:hidden shrink-0"
+              >
+                <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="flex-1 overflow-y-auto px-3" style={{ scrollbarGutter: 'stable' }}>
@@ -1297,7 +1526,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                   <div
                     key={s.id}
                     onClick={() => {
-                      if (renamingSessionId !== s.id) setCurrentSessionId(s.id)
+                      if (renamingSessionId !== s.id) {
+                        setCurrentSessionId(s.id)
+                        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                          setSidebarOpen(false)
+                        }
+                      }
                     }}
                     className={`group flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all ${currentSessionId === s.id ? 'bg-primary/10 border-primary/20 border shadow-sm' : 'hover:bg-muted border border-transparent'
                       }`}
@@ -1327,7 +1561,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                         </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                            <button className="opacity-0 group-hover:opacity-100 p-1 hover:text-primary transition-all flex-shrink-0">
+                            <button className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 hover:text-primary transition-all flex-shrink-0">
                               <MoreHorizontal className="h-3.5 w-3.5" />
                             </button>
                           </DropdownMenuTrigger>
@@ -1389,33 +1623,55 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
               </div>
             ) : (
               <div className="space-y-6 max-w-3xl mx-auto w-full">
-                {messages.map((m, i) => (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    key={i}
-                    className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    ref={m.role === 'user' ? lastUserMessageRef : undefined}
-                  >
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${m.role === 'user'
-                        ? 'bg-primary text-primary-foreground rounded-tr-none'
-                        : 'bg-card border border-border/50 text-foreground rounded-tl-none'
-                      }`}>
-                      {m.role === 'user' ? (
-                        <p dir="auto" className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
-                      ) : (
-                        <div className="text-[16.25px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
-                          {renderMarkdown(m.content)}
-                        </div>
-                      )}
-                    </div>
-                  </motion.div>
-                ))}
-                {isLoading && (
+                {messages.map((m, i) => {
+                  const isLastMessage = i === messages.length - 1
+                  const isStreamingActive = isLastMessage && m.role === 'assistant' && isStreaming
+
+                  return (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      key={m.id || i}
+                      className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      ref={m.role === 'user' ? lastUserMessageRef : undefined}
+                    >
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${m.role === 'user'
+                          ? 'bg-primary text-primary-foreground rounded-tr-none'
+                          : 'bg-card border border-border/50 text-foreground rounded-tl-none'
+                        }`}>
+                        {m.role === 'user' ? (
+                          <p dir="auto" className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                        ) : !m.content && isStreamingActive ? (
+                          <div className="flex items-center gap-1.5 py-1.5 px-1">
+                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
+                          </div>
+                        ) : (
+                          <div className="text-[16.25px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
+                            {renderMarkdown(m.content)}
+                            {isStreamingActive && (
+                              <span className="inline-flex items-center gap-1 ml-2 align-middle">
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce" />
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )
+                })}
+                {isLoading && !isStreaming && (
                   <div className="flex justify-start">
                     <div className="bg-card border border-border/50 rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      <span className="text-sm text-muted-foreground">Assistant is thinking...</span>
+                      <div className="flex items-center gap-1.5 py-1 px-0.5">
+                        <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                        <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                        <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
+                      </div>
+                      <span className="text-sm text-muted-foreground ml-1">Assistant is thinking...</span>
                     </div>
                   </div>
                 )}
