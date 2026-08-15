@@ -62,10 +62,33 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=my_compare_type,
     )
 
     with context.begin_transaction():
         context.run_migrations()
+
+
+def my_compare_type(context, inspected_column, metadata_column, inspected_type, metadata_type):
+    # Ignore equivalent string/text type differences between Supabase TEXT and SQLAlchemy String
+    ins_type = type(inspected_type).__name__.upper()
+    meta_type = type(metadata_type).__name__.upper()
+    if ins_type in ("TEXT", "VARCHAR", "STRING") and meta_type in ("TEXT", "VARCHAR", "STRING"):
+        return False
+    return None
+
+
+def include_object(object, name, type_, reflected, compare_to):
+    """
+    Only report table-level additions and removals.
+    Ignore column, index, FK, and constraint differences on existing tables
+    to avoid noise from schema drift between Supabase native schema and ORM models.
+    """
+    # Always include tables (so new/removed tables are detected)
+    if type_ == "table":
+        return True
+    # Skip everything else on tables that already exist in the DB
+    return False
 
 
 def run_migrations_online() -> None:
@@ -84,7 +107,9 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            compare_type=True,
+            compare_type=False,
+            compare_nullable=False,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

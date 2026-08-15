@@ -377,6 +377,14 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
     router.replace(`${pathname}?tab=${resolvedTab}`, { scroll: false })
   }, [pathname, requestedTab, resolvedTab, router])
 
+  if (isAuthLoading || !user) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+
   if (isLoading && !material) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">

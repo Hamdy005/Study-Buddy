@@ -613,9 +613,13 @@ export default function DashboardPage() {
     })
   }
 
-  const isCurrentRenameTargetDuplicate = renameTarget ? materials.some(
-    (m) => m.id !== renameTarget.id && m.title.trim().toLowerCase() === renameTarget.title.trim().toLowerCase()
-  ) : false;
+  if (isAuthLoading || !user) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background">
