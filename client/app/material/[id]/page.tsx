@@ -2095,8 +2095,12 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
           throw new Error('No questions returned')
         }
       }
-    } catch {
-      toast.error('Failed to generate quiz. Please try again.')
+    } catch (err: any) {
+      // Show the server's exact error message so users see "Daily limit reached"
+      const msg: string = err?.message || 'Failed to generate quiz. Please try again.'
+      toast.error(msg)
+      // Always refresh usage on failure
+      refreshUsage()
     } finally {
       if (isMounted.current && !generated) {
         stopQuizGenerating()

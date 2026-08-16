@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useTheme } from 'next-themes'
 import { supabase } from '@/lib/supabase'
-import { authAPI, setApiToken, onForceSignOut } from '@/lib/api'
+import { authAPI, setApiToken, getApiToken, onForceSignOut } from '@/lib/api'
 
 export interface UserData {
   id: string
@@ -226,9 +226,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
 
-      // We only need to exchange the token once per new Supabase session.
-      // If we already have our own JWT in state, the session is already exchanged.
-      if (token) return
+      // TOKEN_REFRESHED is fired when the tab regains focus and Supabase rotates
+      // its own session internally. We don't need to re-exchange — our own
+      // HttpOnly refresh cookie is already valid. Skip to avoid re-issuing a
+      // new refresh token and inadvertently invalidating the existing cookie.
+      if (event === 'TOKEN_REFRESHED') return
+
+      // We only need to exchange the token once per new Supabase SIGNED_IN event.
+      // Use getApiToken() (module-level, always current) instead of the React
+      // `token` state which is stale inside this closure (empty dep array).
+      if (getApiToken()) return
 
       try {
         const result = await authAPI.exchangeSession(session.access_token)

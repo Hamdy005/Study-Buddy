@@ -9,7 +9,7 @@ from src.rag.rag import store_embeddings_async
 from src.store import (
     get_material, get_chunks, save_chunks, save_summary,
     get_summary as get_stored_summary, update_material_status,
-    check_daily_limit, increment_daily_usage,
+    atomic_check_and_increment_daily_limit, decrement_daily_usage, ADMIN_EMAILS,
 )
 from src.dependencies import get_current_user_id, get_current_user
 from src.config import settings
@@ -25,15 +25,20 @@ async def generate_summary(
     user_id: str = Depends(get_current_user_id),
     current_user=Depends(get_current_user),
 ):
-    # Rate limit check
+    # Atomically reserve a daily request slot before starting expensive generation.
     user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-    if not check_daily_limit(user_id, email=user_email, limit=20):
+    is_admin = bool(user_email and user_email in ADMIN_EMAILS)
+    if not atomic_check_and_increment_daily_limit(user_id, email=user_email, limit=20):
         raise HTTPException(429, "Daily limit of 20 requests reached. Come back tomorrow!")
 
     mat = get_material(body.material_id)
     if not mat:
+        if not is_admin:
+            decrement_daily_usage(user_id)
         raise HTTPException(404, "Material not found")
     if mat.get("user_id") != user_id:
+        if not is_admin:
+            decrement_daily_usage(user_id)
         raise HTTPException(403, "Access denied")
 
     try:
@@ -106,12 +111,15 @@ async def generate_summary(
             model_name=settings.model_name,
         )
 
-        # Only increment limit if the summary was generated successfully and saved without error
-        if not (user_email and user_email in settings.admin_emails if hasattr(settings, "admin_emails") else False):
-            increment_daily_usage(user_id)
-
         return SummarizeResponse(summary=summary, time_taken=elapsed)
+    except HTTPException:
+        # Refund on any HTTP exception raised inside the try block (e.g. 400).
+        if not is_admin:
+            decrement_daily_usage(user_id)
+        raise
     except Exception as e:
+        if not is_admin:
+            decrement_daily_usage(user_id)
         raise HTTPException(500, f"Summarization failed: {e}")
 
 

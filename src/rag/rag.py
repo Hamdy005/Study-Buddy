@@ -75,40 +75,60 @@ async def store_embeddings_async(material_id: str, chunk_ids: list[str], chunks:
     """
     Async variant of store_embeddings that routes embedding inference through
     the batch worker queue for batching across concurrent requests.
+    Falls back to the synchronous path if the batch workers are not running.
     """
-    from src.rag.batch_workers import embedding_queue, job_store
-    from .schemas import EmbeddingJob
+    try:
+        from src.rag.batch_workers import embedding_queue, job_store
+        from .schemas import EmbeddingJob
 
-    job = EmbeddingJob(job_id=str(uuid.uuid4()), texts=chunks)
-    job_store[job.job_id] = {"status": "pending", "result": None, "error": None}
-    await embedding_queue.put(job)
-    await job.done.wait()
+        job = EmbeddingJob(job_id=str(uuid.uuid4()), texts=chunks)
+        job_store[job.job_id] = {"status": "pending", "result": None, "error": None}
+        await embedding_queue.put(job)
 
-    entry = job_store.pop(job.job_id)
-    if entry["status"] == "error":
-        raise RuntimeError(f"Embedding failed: {entry['error']}")
+        # Wait for the worker to process the job, but with a timeout.
+        # If batch workers are not running (e.g. commented out in main.py),
+        # this would hang forever — the timeout triggers a fallback to the sync path.
+        try:
+            await asyncio.wait_for(job.done.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            # Workers not running — clean up and fall back to sync embedding
+            job_store.pop(job.job_id, None)
+            logger.warning(
+                f"store_embeddings_async timed out waiting for batch worker "
+                f"(material={material_id}). Falling back to synchronous embedding."
+            )
+            await asyncio.to_thread(store_embeddings, material_id, chunk_ids, chunks)
+            return
 
-    embeddings = entry["result"]
+        entry = job_store.pop(job.job_id)
+        if entry["status"] == "error":
+            raise RuntimeError(f"Embedding failed: {entry['error']}")
 
-    records = [
-        {"chunk_id": cid, "material_id": material_id, "embedding": emb}
-        for cid, emb in zip(chunk_ids, embeddings)
-    ]
+        embeddings = entry["result"]
 
-    db = get_supabase()
-    if db is None:
-        logger.warning("Supabase not connected — embeddings computed but NOT stored (no DB).")
-        return
+        records = [
+            {"chunk_id": cid, "material_id": material_id, "embedding": emb}
+            for cid, emb in zip(chunk_ids, embeddings)
+        ]
 
-    logger.info(f"Storing {len(records)} embeddings in Supabase for material {material_id}...")
-    
-    def _insert_records():
-        for i in range(0, len(records), 50):
-            db.table("material_embeddings").insert(records[i:i + 50]).execute()
-            
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _insert_records)
-    logger.info(f"Embeddings stored successfully for material {material_id}.")
+        db = get_supabase()
+        if db is None:
+            logger.warning("Supabase not connected — embeddings computed but NOT stored (no DB).")
+            return
+
+        logger.info(f"Storing {len(records)} embeddings in Supabase for material {material_id}...")
+
+        def _insert_records():
+            for i in range(0, len(records), 50):
+                db.table("material_embeddings").insert(records[i:i + 50]).execute()
+
+        await asyncio.to_thread(_insert_records)
+        logger.info(f"Embeddings stored successfully for material {material_id}.")
+
+    except Exception as e:
+        # If anything unexpected fails, fall back to sync to avoid blocking the caller.
+        logger.warning(f"store_embeddings_async failed ({e}); falling back to sync.")
+        await asyncio.to_thread(store_embeddings, material_id, chunk_ids, chunks)
 
 
 def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:

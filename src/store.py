@@ -816,14 +816,154 @@ def increment_daily_usage(user_id: str) -> None:
         logger.error(f"Failed to increment daily usage: {e}")
 
 
+def decrement_daily_usage(user_id: str) -> None:
+    """
+    Rollback helper — decrements the daily counter by 1 (clamped to 0).
+
+    Called when a generation request was reserved (incremented) but failed
+    before producing a usable result, so the user is not penalised for a
+    server-side error.
+    """
+    today = _get_today_date_str()
+
+    # ── Redis path — atomic DECR clamped to 0 ────────────────────────────────
+    r = get_redis()
+    if r is not None:
+        try:
+            rkey = f"{DAILY_RATE_LIMIT_KEY_PREFIX}{user_id}:{today}"
+            # DECR is atomic; clamp to 0 so we never go negative
+            current = r.decr(rkey)
+            if current < 0:
+                r.set(rkey, 0)
+                r.expire(rkey, DAILY_RATE_LIMIT_REDIS_TTL)
+        except Exception as e:
+            logger.warning("Redis decrement_daily_usage failed: %s", e)
+
+    # ── Supabase — keep DB in sync ────────────────────────────────────────────
+    try:
+        result = _robust_execute(
+            _table_supabase("profiles")
+            .select("daily_requests, last_request_date")
+            .eq("id", user_id)
+        )
+        if not result.data:
+            return
+        profile = result.data[0] if result.data else None
+        if not profile:
+            return
+
+        last_date = profile.get("last_request_date")
+        count = profile.get("daily_requests", 0) or 0
+        if last_date != today:
+            count = 0
+        new_count = max(0, count - 1)
+
+        _robust_execute(
+            _table_supabase("profiles")
+            .update({"daily_requests": new_count, "last_request_date": today})
+            .eq("id", user_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to decrement daily usage: {e}")
+
+
+# Lua script: atomically check count < limit, then INCR + EXPIRE if allowed.
+# Returns 1 (allowed and incremented) or 0 (limit exceeded, no change).
+_ATOMIC_RATE_LIMIT_LUA = """
+local key   = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl   = tonumber(ARGV[2])
+local count = tonumber(redis.call('GET', key) or 0)
+if count >= limit then
+    return 0
+end
+redis.call('INCR', key)
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
+
+
+def atomic_check_and_increment_daily_limit(
+    user_id: str, email: Optional[str] = None, limit: int = 20
+) -> bool:
+    """
+    Atomically check the daily limit AND increment in one operation.
+
+    This eliminates the TOCTOU race condition that existed when `check_daily_limit`
+    and `increment_daily_usage` were called as two separate steps: concurrent
+    requests could both pass the check before either had incremented the counter.
+
+    Redis path: executes a Lua script so the GET + conditional INCR is one
+    indivisible command — Redis serialises all commands within a script.
+
+    Supabase fallback: increment first, then verify; rollback if over limit.
+    This is safe because Supabase operations are individually atomic (but not
+    as tight as the Lua approach under extreme concurrency).
+
+    Returns True if the request is allowed (counter was incremented),
+    False if the daily limit is already reached (counter unchanged).
+    """
+    # Admins are always allowed and never counted
+    if email and email in ADMIN_EMAILS:
+        return True
+
+    today = _get_today_date_str()
+
+    # ── Redis path: true atomic check-and-increment via Lua ───────────────────
+    r = get_redis()
+    if r is not None:
+        try:
+            rkey = f"{DAILY_RATE_LIMIT_KEY_PREFIX}{user_id}:{today}"
+            result = r.eval(_ATOMIC_RATE_LIMIT_LUA, 1, rkey, limit, DAILY_RATE_LIMIT_REDIS_TTL)
+            return bool(result)   # 1 → allowed, 0 → exceeded
+        except Exception as e:
+            logger.warning(
+                "Redis atomic_check_and_increment failed: %s — falling back to Supabase", e
+            )
+
+    # ── Supabase fallback: increment-first strategy ───────────────────────────
+    try:
+        result = _robust_execute(
+            _table_supabase("profiles")
+            .select("daily_requests, last_request_date")
+            .eq("id", user_id)
+        )
+        if not result.data:
+            # No profile row yet — treat as first request (allowed)
+            _robust_execute(
+                _table_supabase("profiles")
+                .update({"daily_requests": 1, "last_request_date": today})
+                .eq("id", user_id)
+            )
+            return True
+
+        profile = result.data[0]
+        last_date = profile.get("last_request_date")
+        count = profile.get("daily_requests", 0) or 0
+        if last_date != today:
+            count = 0   # day rolled over — reset
+
+        if count >= limit:
+            return False  # already at limit — do not increment
+
+        # Increment in Supabase
+        _robust_execute(
+            _table_supabase("profiles")
+            .update({"daily_requests": count + 1, "last_request_date": today})
+            .eq("id", user_id)
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Supabase atomic_check_and_increment failed: {e}")
+        return True   # fail open rather than block the user on a DB error
+
+
 def check_and_increment_daily_limit(user_id: str, email: Optional[str] = None, limit: int = 20) -> bool:
     """
-    Check limit and increment if allowed. Deprecated/kept for compatibility.
+    Legacy wrapper kept for backward compatibility (used in rag/routes.py).
+    Delegates to the new atomic implementation.
     """
-    allowed = check_daily_limit(user_id, email, limit)
-    if allowed and not (email and email in ADMIN_EMAILS):
-        increment_daily_usage(user_id)
-    return allowed
+    return atomic_check_and_increment_daily_limit(user_id, email, limit)
 
 
 def get_usage(user_id: str) -> dict:
