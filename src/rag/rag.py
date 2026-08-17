@@ -1,11 +1,15 @@
 import os
 import asyncio
 import uuid
+import concurrent.futures
 from loguru import logger
 from functools import lru_cache
 from typing import Optional
-from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_community.utilities import WikipediaAPIWrapper
+from pydantic import BaseModel, Field
+from duckduckgo_search import DDGS
+from langchain_community.utilities import WikipediaAPIWrapper, ArxivAPIWrapper
+from langchain_core.tools import StructuredTool
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
@@ -24,8 +28,13 @@ from .constants import (
     CHAT_TITLE_PROMPT_TEMPLATE,
     WIKI_TOP_K_RESULTS,
     WIKI_DOC_CONTENT_CHARS_MAX,
+    WIKI_DOC_CONTENT_CHARS_SUMMARY,
     DUCKDUCKGO_NUM_RESULTS,
     DUCKDUCKGO_DOC_CONTENT_CHARS_MAX,
+    DUCKDUCKGO_DOC_CONTENT_CHARS_SUMMARY,
+    ARXIV_TOP_K_RESULTS,
+    ARXIV_DOC_CONTENT_CHARS_MAX,
+    ARXIV_DOC_CONTENT_CHARS_SUMMARY,
     MEMORY_WINDOW_SIZE,
     TOP_K_CHUNKS,
 )
@@ -253,22 +262,37 @@ def _clean_llm_response(content) -> str:
 
 # ── Web Search Helpers ────────────────────────────────
 
-def direct_ddg_search(query: str) -> str:
+def direct_ddg_search(query: str, max_chars: int = DUCKDUCKGO_DOC_CONTENT_CHARS_MAX) -> str:
     """
-    Run a targeted DuckDuckGo search for *query*.
-    Used for ALL material types (topics, PDFs, URLs) to supplement context.
-    Returns an empty string if the search fails.
+    Run a DuckDuckGo web search for *query*, trying multiple backends in order.
+    Falls back from html → lite → api until a backend returns results.
+    Returns an empty string if all backends fail.
     """
-    try:
-        duck_api = DuckDuckGoSearchResults(num_results=DUCKDUCKGO_NUM_RESULTS)
-        raw = duck_api.run(query)
-        return raw[:DUCKDUCKGO_DOC_CONTENT_CHARS_MAX]
-    except Exception as e:
-        logger.warning(f"direct_ddg_search failed: {e}")
-        return ""
+    for backend in ("html", "lite", "api"):
+        try:
+            ddgs = DDGS()
+            results = list(ddgs.text(query, max_results=DUCKDUCKGO_NUM_RESULTS, backend=backend))
+            if not results:
+                logger.warning(f"direct_ddg_search backend='{backend}': 0 results for '{query[:60]}'")
+                continue
+            snippets = [
+                f"{r.get('title', '')}: {r.get('body', '')}"
+                for r in results
+                if r.get('body')
+            ]
+            combined = "\n".join(snippets)
+            if not combined.strip():
+                continue
+            logger.info(f"direct_ddg_search: {len(results)} results via backend='{backend}' chars={len(combined)}")
+            return combined[:max_chars]
+        except Exception as e:
+            logger.warning(f"direct_ddg_search backend='{backend}' failed: {type(e).__name__}: {e}")
+            continue
+    logger.warning(f"direct_ddg_search: all backends failed for '{query[:60]}'")
+    return ""
 
 
-def direct_wiki_search(query: str) -> str:
+def direct_wiki_search(query: str, max_chars: int = WIKI_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run a targeted Wikipedia search for *query*.
     Used ONLY for topic-type materials (no PDF/URL).
@@ -277,13 +301,242 @@ def direct_wiki_search(query: str) -> str:
     try:
         wiki_api = WikipediaAPIWrapper(
             top_k_results=WIKI_TOP_K_RESULTS,
-            doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
+            doc_content_chars_max=max_chars,
         )
         result = wiki_api.run(query)
-        return result[:WIKI_DOC_CONTENT_CHARS_MAX]
+        return result[:max_chars]
     except Exception as e:
         logger.warning(f"direct_wiki_search failed: {e}")
         return ""
+
+
+def direct_arxiv_search(query: str, max_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX) -> str:
+    """
+    Run an ArXiv paper search for *query*.
+    Invoked only when the agentic router classifies the topic as scientific/technical.
+    Returns an empty string if the search fails.
+    """
+    try:
+        arxiv_api = ArxivAPIWrapper(
+            top_k_results=ARXIV_TOP_K_RESULTS,
+            doc_content_chars_max=max_chars,
+        )
+        result = arxiv_api.run(query)
+        return result[:max_chars]
+    except Exception as e:
+        logger.warning(f"direct_arxiv_search failed: {e}")
+        return ""
+
+
+# ── Agentic Tool Definitions & Router ──────────────────
+
+class _SearchInput(BaseModel):
+    query: str = Field(description="The exact search query string to look up")
+
+
+def _make_search_tools(is_topic: bool) -> list:
+    """
+    Build the LangChain StructuredTool list available to the agentic router.
+
+    - Topics  → Wikipedia + DuckDuckGo + ArXiv (agent picks the right ones)
+    - PDF/URL → DuckDuckGo + ArXiv only (vector search already covers the doc)
+    """
+    wiki_tool = StructuredTool(
+        name="wikipedia_search",
+        func=direct_wiki_search,
+        args_schema=_SearchInput,
+        description=(
+            "Search Wikipedia for encyclopedic, well-established knowledge. "
+            "This is your go-to source for foundational definitions, historical context, "
+            "scientific principles, biographies, and any topic with broad public documentation. "
+            "Use this when the query involves a recognized concept, person, event, field of study, "
+            "or any subject that a general-purpose encyclopedia would cover authoritatively. "
+            "Do NOT use for cutting-edge research not yet documented in Wikipedia, "
+            "real-time events, or highly niche technical subjects where ArXiv is superior."
+        ),
+    )
+
+    ddg_tool = StructuredTool(
+        name="web_search",
+        func=direct_ddg_search,
+        args_schema=_SearchInput,
+        description=(
+            "Search the live web using DuckDuckGo to retrieve current, diverse, and up-to-date "
+            "information from across the internet. "
+            "This is your broadest and most versatile retrieval tool — use it to find recent "
+            "developments, practical tutorials, software documentation, real-world examples, "
+            "news, and any topic that benefits from multiple diverse perspectives. "
+            "Always consider this tool — it fills the gaps left by encyclopedias and academic papers, "
+            "and it excels at contemporary, applied, or rapidly evolving subjects."
+        ),
+    )
+
+    arxiv_tool = StructuredTool(
+        name="arxiv_search",
+        func=direct_arxiv_search,
+        args_schema=_SearchInput,
+        description=(
+            "Search ArXiv for peer-reviewed preprints and cutting-edge academic research papers. "
+            "This tool delivers research-grade, technically precise content from the world's "
+            "leading open-access scientific repository. "
+            "Use this ONLY when the topic is clearly within an active scientific or technical domain, "
+            "such as: machine learning, deep learning, LLMs, computer vision, NLP, reinforcement learning, "
+            "physics, quantum computing, mathematics, statistics, biology, genomics, chemistry, "
+            "neuroscience, or any subject with a strong published academic literature. "
+            "Do NOT use for general knowledge, history, geography, language learning, social sciences, "
+            "or everyday topics that lack a formal research literature."
+        ),
+    )
+
+    if is_topic:
+        return [wiki_tool, ddg_tool, arxiv_tool]
+    else:
+        # PDF/URL: document covers domain knowledge; only supplement with web/arxiv if needed
+        return [ddg_tool, arxiv_tool]
+
+
+def _agentic_gather_web_content(
+    query: str,
+    is_topic: bool,
+    existing_doc_context: str = "",
+    subject_title: str = "",
+) -> tuple[str, bool, bool, bool]:
+    """
+    Core agentic routing engine.
+
+    Uses a fast LLM to decide *which* search tools (if any) are worth calling
+    for this specific query, then executes the selected tools in parallel.
+
+    Args:
+        query:               The user's question or study topic.
+        is_topic:            True for custom topic materials; False for PDF/URL.
+        existing_doc_context: For PDF/URL chatbot — the already-retrieved vector chunks
+                              so the router can decide if web enrichment is needed.
+        subject_title:       Material title, appended to web search queries for accuracy.
+
+    Returns:
+        (combined_content, has_wiki, has_ddg, has_arxiv)
+    """
+    tools = _make_search_tools(is_topic)
+    tool_map = {
+        "wikipedia_search": (direct_wiki_search, "Wikipedia"),
+        "web_search":       (direct_ddg_search,  "Web Search"),
+        "arxiv_search":     (direct_arxiv_search, "ArXiv Research"),
+    }
+
+    # ── Router LLM call ──────────────────────────────────────────────────
+    try:
+        router_llm = get_summary_llm()
+        llm_with_tools = router_llm.bind_tools(tools)
+
+        if is_topic:
+            messages = [
+                SystemMessage(content=(
+                    "You are an expert AI educational research router. "
+                    "Your job is to select search tools to gather comprehensive background information for a study topic. "
+                    "You MUST select and invoke search tools for any topic. "
+                    "Call web_search for up-to-date web content. "
+                    "Call wikipedia_search for foundational encyclopedic knowledge. "
+                    "Call arxiv_search ONLY if the topic involves scientific, academic, machine learning, physics, math, AI, or technical research."
+                )),
+                HumanMessage(content=f'Study topic to research: "{query}"'),
+            ]
+        else:
+            doc_preview = existing_doc_context[:600].strip() if existing_doc_context else ""
+            messages = [
+                SystemMessage(content=(
+                    "You are an AI research router evaluating a user query against existing document context. "
+                    "Decide whether external search tools are needed to supplement the document context. "
+                    "If the document context is sufficient to answer the query, do NOT call any tools. "
+                    "If the query asks for current info, recent software versions, releases, real-time facts, "
+                    "or topics missing from the document context, you MUST call web_search. "
+                    "If the query asks for academic paper research or cutting-edge scientific methods, call arxiv_search."
+                )),
+                HumanMessage(content=(
+                    f'User query: "{query}"\n'
+                    f'Subject: "{subject_title}"\n'
+                    f'Document context retrieved:\n{doc_preview}'
+                )),
+            ]
+
+        router_response = llm_with_tools.invoke(messages)
+        selected_calls = getattr(router_response, "tool_calls", []) or []
+
+    except Exception as e:
+        logger.warning(f"Agentic router LLM failed ({e}); falling back to default tool selection.")
+        selected_calls = []
+
+    # Guarantee search tool execution for custom topics if LLM didn't emit calls
+    if is_topic and not selected_calls:
+        logger.info(f"Agentic router emitted no calls for topic '{query}'; activating intelligent fallback.")
+        academic_keywords = {"llm", "lora", "quantum", "model", "neural", "transformer", "algorithm", "deep learning", "ai", "physics", "math", "genomics", "arxiv"}
+        q_lower = query.lower()
+        is_academic = any(kw in q_lower for kw in academic_keywords)
+
+        selected_calls = [
+            {"name": "wikipedia_search", "args": {"query": query}},
+            {"name": "web_search",       "args": {"query": f"{query} {subject_title}".strip()}},
+        ]
+        if is_academic:
+            selected_calls.append({"name": "arxiv_search", "args": {"query": query}})
+
+    # For PDF/URL materials: if query asks for current/latest/external info and router returned 0 tools, fallback to web_search
+    if not is_topic and not selected_calls:
+        external_keywords = {"latest", "current", "recent", "release", "version", "today", "news", "price", "2025", "2026"}
+        q_lower = query.lower()
+        if any(kw in q_lower for kw in external_keywords):
+            logger.info(f"External/temporal query detected for PDF material '{query}'; activating web_search fallback.")
+            selected_calls = [{"name": "web_search", "args": {"query": query}}]
+
+    if not selected_calls:
+        logger.info(f"Agentic router: no tools selected for query='{query}' is_topic={is_topic}")
+        return "", False, False, False
+
+    # ── Parallel tool execution ───────────────────────────────────────────
+    context_parts: list[str] = []
+    has_wiki = has_ddg = has_arxiv = False
+
+    # Determine higher character limits for Topic Creation (Gemini 3.5 Flash Lite - high context)
+    wiki_max = WIKI_DOC_CONTENT_CHARS_SUMMARY if is_topic else WIKI_DOC_CONTENT_CHARS_MAX
+    ddg_max = DUCKDUCKGO_DOC_CONTENT_CHARS_SUMMARY if is_topic else DUCKDUCKGO_DOC_CONTENT_CHARS_MAX
+    arxiv_max = ARXIV_DOC_CONTENT_CHARS_SUMMARY if is_topic else ARXIV_DOC_CONTENT_CHARS_MAX
+
+    def _run_tool(tool_call: dict) -> tuple[str, str, str]:
+        name = tool_call.get("name", "")
+        args = tool_call.get("args", {})
+        raw_query = args.get("query", query)
+        # Enrich DuckDuckGo query with subject title only for short queries that lack subject context
+        if name == "web_search" and subject_title:
+            if len(raw_query.split()) < 4 and subject_title.lower() not in raw_query.lower():
+                raw_query = f"{raw_query} {subject_title}".strip()
+        
+        if name == "wikipedia_search":
+            return name, "Wikipedia", direct_wiki_search(raw_query, max_chars=wiki_max)
+        elif name == "web_search":
+            return name, "Web Search", direct_ddg_search(raw_query, max_chars=ddg_max)
+        elif name == "arxiv_search":
+            return name, "ArXiv Research", direct_arxiv_search(raw_query, max_chars=arxiv_max)
+        return name, "", ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(selected_calls)) as executor:
+        futures = [executor.submit(_run_tool, tc) for tc in selected_calls]
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                name, label, result = fut.result(timeout=20)
+                if result.strip():
+                    context_parts.append(f"--- {label} ---\n{result}")
+                    if name == "wikipedia_search": has_wiki = True
+                    elif name == "web_search":      has_ddg  = True
+                    elif name == "arxiv_search":    has_arxiv = True
+            except Exception as e:
+                logger.warning(f"Tool execution error: {e}")
+
+    combined = "\n\n".join(context_parts)
+    logger.info(
+        f"Agentic web gather done — wiki={has_wiki} ddg={has_ddg} arxiv={has_arxiv} "
+        f"chars={len(combined)} for query='{query}'"
+    )
+    return combined, has_wiki, has_ddg, has_arxiv
 
 
 # ── Supabase Retriever  ────────────────
@@ -305,12 +558,20 @@ class SupabaseRetriever(BaseRetriever):
 
 # ── RAG Prompt ─────────────────────────────────────────
 
-def _rag_prompt(has_ddg: bool = False, has_wiki: bool = False, has_knowledge_retriever: bool = False, subject: str = ""):
+def _rag_prompt(
+    has_ddg: bool = False,
+    has_wiki: bool = False,
+    has_arxiv: bool = False,
+    has_knowledge_retriever: bool = False,
+    subject: str = "",
+):
     sources = []
     if has_wiki:
         sources.append("Wikipedia snippets")
     if has_ddg:
         sources.append("DuckDuckGo web snippets")
+    if has_arxiv:
+        sources.append("ArXiv research papers")
 
     tools_section = ""
     if sources:
@@ -390,28 +651,28 @@ def rag_answer(
                 sampled_text = "\n---\n".join(c["content"] for c in sampled)
                 context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
 
-    # --- Wikipedia search: topics only ---
-    wiki_snippets = ""
-    if is_topic:
-        wiki_snippets = direct_wiki_search(query)
-        if wiki_snippets:
-            context_parts.append(f"Wikipedia Results:\n{wiki_snippets}")
-
-    # --- DuckDuckGo search: ALL material types (topics, PDFs, URLs) ---
-    # Enrich the search query with the subject title so follow-up / short
     subject_title = mat.get("title") if mat and mat.get("title") else ""
-    ddg_query = f"{query} {subject_title}".strip() if subject_title else query
-    ddg_snippets = direct_ddg_search(ddg_query)
-    if ddg_snippets:
-        context_parts.append(f"Web Search Results (DuckDuckGo):\n{ddg_snippets}")
+
+    # Build existing doc context string for the router (PDF/URL only)
+    existing_doc_context = "\n\n".join(context_parts) if (not is_topic and context_parts) else ""
+
+    # --- Agentic web context gathering ---
+    web_content, has_wiki, has_ddg, has_arxiv = _agentic_gather_web_content(
+        query=query,
+        is_topic=is_topic,
+        existing_doc_context=existing_doc_context,
+        subject_title=subject_title,
+    )
+    if web_content:
+        context_parts.append(web_content)
 
     context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
 
     has_knowledge = not is_topic
-    subject_title = mat.get("title") if mat and mat.get("title") else ""
     prompt = _rag_prompt(
-        has_ddg=bool(ddg_snippets),
-        has_wiki=bool(wiki_snippets),
+        has_ddg=has_ddg,
+        has_wiki=has_wiki,
+        has_arxiv=has_arxiv,
         has_knowledge_retriever=has_knowledge,
         subject=subject_title,
     )
@@ -524,27 +785,29 @@ async def rag_answer_stream(
                 sampled_text = "\n---\n".join(c["content"] for c in sampled)
                 context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
 
-    # --- Wikipedia search: topics only ---
-    wiki_snippets = ""
-    if is_topic:
-        wiki_snippets = await asyncio.to_thread(direct_wiki_search, query)
-        if wiki_snippets:
-            context_parts.append(f"Wikipedia Results:\n{wiki_snippets}")
-
-    # --- DuckDuckGo search: ALL material types (topics, PDFs, URLs) ---
     subject_title = mat.get("title") if mat and mat.get("title") else ""
-    ddg_query = f"{query} {subject_title}".strip() if subject_title else query
-    ddg_snippets = await asyncio.to_thread(direct_ddg_search, ddg_query)
-    if ddg_snippets:
-        context_parts.append(f"Web Search Results (DuckDuckGo):\n{ddg_snippets}")
+
+    # Build existing doc context string for the router (PDF/URL only)
+    existing_doc_context = "\n\n".join(context_parts) if (not is_topic and context_parts) else ""
+
+    # --- Agentic web context gathering (runs in thread to avoid blocking event loop) ---
+    web_content, has_wiki, has_ddg, has_arxiv = await asyncio.to_thread(
+        _agentic_gather_web_content,
+        query,
+        is_topic,
+        existing_doc_context,
+        subject_title,
+    )
+    if web_content:
+        context_parts.append(web_content)
 
     context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
 
     has_knowledge = not is_topic
-    subject_title = mat.get("title") if mat and mat.get("title") else ""
     prompt = _rag_prompt(
-        has_ddg=bool(ddg_snippets),
-        has_wiki=bool(wiki_snippets),
+        has_ddg=has_ddg,
+        has_wiki=has_wiki,
+        has_arxiv=has_arxiv,
         has_knowledge_retriever=has_knowledge,
         subject=subject_title,
     )

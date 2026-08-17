@@ -1,8 +1,6 @@
 import re
 from loguru import logger
-import concurrent.futures
-from langchain_community.utilities import WikipediaAPIWrapper, DuckDuckGoSearchAPIWrapper
-from src.rag.rag import get_summary_llm, get_summary_fallback_llm
+from src.rag.rag import get_summary_llm, get_summary_fallback_llm, _agentic_gather_web_content
 from .constants import (
     SUMMARIZER_PROMPT_TEMPLATE,
     WEB_SUMMARIZER_PROMPT_TEMPLATE,
@@ -70,52 +68,30 @@ def summarizer(text: str) -> str:
 
 def fetch_web_content(topic: str) -> str:
     """
-    Fetch raw Wikipedia + DuckDuckGo content for *topic* and return the combined
-    text string.  This is a pure data-fetching helper — no LLM is called.
+    Fetch web content for *topic* using the agentic tool-selection engine.
+
+    The router LLM decides which combination of Wikipedia, DuckDuckGo, and
+    ArXiv will produce the richest educational content for this topic, then
+    executes the selected tools in parallel and returns the combined text.
 
     The returned text can be:
     - Chunked and stored in the DB for future reuse.
     - Passed directly to an LLM prompt as context.
     """
-    logger.info(f"fetch_web_content started for topic: {topic}")
-
-    def _fetch_wikipedia():
-        try:
-            wiki_api = WikipediaAPIWrapper(
-                top_k_results=WIKI_TOP_K_RESULTS,
-                doc_content_chars_max=WIKI_DOC_CONTENT_CHARS_MAX,
-            )
-            return wiki_api.run(topic)
-        except Exception as e:
-            logger.warning(f"Wikipedia search for '{topic}' failed: {e}")
-            return ""
-
-    def _fetch_duckduckgo():
-        try:
-            duck_api = DuckDuckGoSearchAPIWrapper()
-            return duck_api.run(topic)
-        except Exception as e:
-            logger.warning(f"DuckDuckGo search for '{topic}' failed: {e}")
-            return ""
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        wiki_future = executor.submit(_fetch_wikipedia)
-        duck_future = executor.submit(_fetch_duckduckgo)
-        wiki_content = wiki_future.result()
-        duck_content = duck_future.result()
-
-    all_content = []
-    if wiki_content and wiki_content.strip():
-        all_content.append(f"--- Wikipedia ---\n{wiki_content}")
-    if duck_content and duck_content.strip():
-        all_content.append(f"--- Web Search ---\n{duck_content}")
-
-    if not all_content:
-        logger.warning(f"No content found for topic: {topic}. Returning placeholder.")
+    logger.info(f"fetch_web_content (agentic) started for topic: {topic}")
+    combined, has_wiki, has_ddg, has_arxiv = _agentic_gather_web_content(
+        query=topic,
+        is_topic=True,
+        existing_doc_context="",
+        subject_title="",
+    )
+    if not combined or not combined.strip():
+        logger.warning(f"No web content found for topic: {topic}. Returning placeholder.")
         return f"No web content found for: {topic}"
-
-    combined = "\n\n".join(all_content)
-    logger.info(f"fetch_web_content combined length for '{topic}': {len(combined)}")
+    logger.info(
+        f"fetch_web_content done for '{topic}': "
+        f"wiki={has_wiki} ddg={has_ddg} arxiv={has_arxiv} chars={len(combined)}"
+    )
     return combined
 
 

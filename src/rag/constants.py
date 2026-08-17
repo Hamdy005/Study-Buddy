@@ -4,13 +4,20 @@ BATCH_MAX_SIZE = 8
 BATCH_WINDOW_S = 0.05
 WARMUP_INTERVAL_S = 300
 
-# Web search configuration — Wiki + DDG for topics, DDG only for PDF/URL materials.
-WIKI_TOP_K_RESULTS = 1                   # Number of top Wikipedia articles retrieved
-WIKI_DOC_CONTENT_CHARS_MAX = 2000        # Max chars from Wikipedia result
+# Web search — now driven by agentic tool selection.
+# Summary & Quiz topic limits (Gemini 3.5 Flash Lite — high context window)
+WIKI_DOC_CONTENT_CHARS_SUMMARY = 5000
+DUCKDUCKGO_DOC_CONTENT_CHARS_SUMMARY = 5000
+ARXIV_DOC_CONTENT_CHARS_SUMMARY = 7000
 
-# DuckDuckGO Search
-DUCKDUCKGO_NUM_RESULTS = 5               # Number of DDG snippet results returned per search
-DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 2500  # Max chars kept from combined DDG result block
+# Chatbot limits (Ministral 8B / fast chat turns — lean context)
+WIKI_DOC_CONTENT_CHARS_MAX = 2000
+DUCKDUCKGO_DOC_CONTENT_CHARS_MAX = 2500
+ARXIV_DOC_CONTENT_CHARS_MAX = 3000
+
+WIKI_TOP_K_RESULTS = 1
+DUCKDUCKGO_NUM_RESULTS = 5
+ARXIV_TOP_K_RESULTS = 1
 
 # RAG & Memory Configuration
 MEMORY_WINDOW_SIZE = 8                  # Number of previous conversation turns preserved in memory window

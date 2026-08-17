@@ -37,6 +37,7 @@ Respond in the SAME LANGUAGE as the input content. If the content is in Arabic, 
 5. Use **Text** to highlight important keywords and terms within paragraphs
 6. Use numbered lists (1. 2. 3.) or bullet points (- ) for enumerations
 7. Do NOT use markdown tables, pipe characters (|), or separator lines (---, ===)
+8. Format all mathematical symbols, equations, and variables using standard LaTeX notation enclosed in dollar signs (e.g. $r$, $\alpha$, $E = mc^2$, or $$ f(x) = ax^2 + bx + c $$ for display equations)
 </formatting_rules>
 
 <content>
@@ -125,6 +126,7 @@ Analyze the content and produce a summary with exactly these five sections in th
 5. Use **Text** to highlight important keywords and terms within paragraphs.
 6. Use numbered lists (1. 2. 3.) or bullet points (- ) for enumerations.
 7. Do NOT use markdown tables, pipe characters (|), or separator lines (---, ===).
+8. Format all mathematical symbols, equations, and variables using standard LaTeX notation enclosed in dollar signs (e.g. $r$, $\alpha$, $E = mc^2$, or $$ f(x) = ax^2 + bx + c $$ for display equations).
 </formatting_rules>
 
 <language>

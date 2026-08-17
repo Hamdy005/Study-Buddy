@@ -1,6 +1,7 @@
 'use client'
 
 import DOMPurify from 'dompurify'
+import katex from 'katex'
 import { useState, useRef, useEffect, use } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -68,8 +69,45 @@ import { useAuth } from '@/contexts/auth-context'
 import { materialsAPI, tutorAPI, quizAPI, usageAPI, asrAPI, getWebSocketUrl, getApiToken } from '@/lib/api'
 import type { Material, ChatMessage, QuizQuestion, QuizResult, ChatSession } from '@/lib/api'
 
+function sanitizeMathHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ADD_TAGS: [
+      'math', 'mrow', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'mspace',
+      'mover', 'munder', 'msup', 'msub', 'msubsup', 'mfrac', 'mroot', 'msqrt',
+      'table', 'tr', 'td', 'th', 'tbody', 'thead', 'tfoot'
+    ],
+    ADD_ATTR: [
+      'aria-hidden', 'encoding', 'xmlns', 'viewBox', 'd', 'fill', 'stroke',
+      'stroke-width', 'mathvariant', 'display'
+    ]
+  })
+}
+
 function formatInlineMd(raw: string): string {
-  return raw
+  if (!raw) return ''
+
+  let processed = raw
+
+  // 1. Process block math $$...$$
+  processed = processed.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
+    try {
+      return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false })
+    } catch {
+      return `$$${math}$$`
+    }
+  })
+
+  // 2. Process inline math $...$
+  processed = processed.replace(/\$([^\$\n]+?)\$/g, (_, math) => {
+    try {
+      return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false })
+    } catch {
+      return `$${math}$`
+    }
+  })
+
+  // 3. Process markdown formatting
+  return processed
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.*?)__/g, '<strong>$1</strong>')
     .replace(/\*((?!\*)[^*]+)\*/g, '<em>$1</em>')
@@ -96,7 +134,7 @@ function renderMarkdown(text: string) {
       const rawContent = headerMatch[2].trim()
       // Strip any surrounding ** or * the model adds around the header text
       const cleanedContent = rawContent.replace(/^\*{1,2}(.+?)\*{1,2}$/, '$1').trim()
-      const htmlContent = DOMPurify.sanitize(formatInlineMd(cleanedContent))
+      const htmlContent = sanitizeMathHtml(formatInlineMd(cleanedContent))
       if (level === 1) {
         elements.push(<h1 key={key++} className="font-bold text-xl mt-5 mb-2 text-foreground" dangerouslySetInnerHTML={{ __html: htmlContent }} />)
       } else if (level === 2) {
@@ -110,16 +148,16 @@ function renderMarkdown(text: string) {
       }
     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('+ ')) {
       const indentClass = leadingSpaces >= 4 ? 'ml-8' : leadingSpaces >= 2 ? 'ml-6' : 'ml-4'
-      const content = DOMPurify.sanitize(formatInlineMd(trimmed.slice(2)))
+      const content = sanitizeMathHtml(formatInlineMd(trimmed.slice(2)))
       elements.push(<li key={key++} className={`${indentClass} list-disc leading-relaxed my-1 text-[15px]`} dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed.match(/^\d+\.\s/)) {
       const indentClass = leadingSpaces >= 4 ? 'ml-8' : leadingSpaces >= 2 ? 'ml-6' : 'ml-4'
-      const content = DOMPurify.sanitize(formatInlineMd(trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '')))
+      const content = sanitizeMathHtml(formatInlineMd(trimmed.replace(/^\d+\.\s*(?:[•\-\–\—\+]\s*|\*(?!\*)\s*)?/, '')))
       elements.push(<li key={key++} className={`${indentClass} list-decimal leading-relaxed my-1 text-[15px]`} dangerouslySetInnerHTML={{ __html: content }} />)
     } else if (trimmed === '') {
       elements.push(<div key={key++} className="h-2" />)
     } else {
-      const content = DOMPurify.sanitize(formatInlineMd(line))
+      const content = sanitizeMathHtml(formatInlineMd(line))
       elements.push(<p key={key++} dir="auto" className="leading-relaxed my-1.5 text-[15px] text-foreground/90" dangerouslySetInnerHTML={{ __html: content }} />)
     }
   }
@@ -869,11 +907,12 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
 
                         <div className={`space-y-4 ${tightenWidth ? 'max-w-2xl' : 'max-w-3xl'} mx-auto px-4`}>
                           {section.content.map((line, lIdx) => (
-                            <p dir="auto" key={lIdx} className={`text-[19.5px] text-foreground leading-relaxed ${tightenWidth ? 'text-left' : 'text-center'}`}>
-                              {line.split('**').map((part, i) =>
-                                i % 2 === 1 ? <strong key={i} className="text-foreground">{part}</strong> : part
-                              )}
-                            </p>
+                            <p
+                              dir="auto"
+                              key={lIdx}
+                              className={`text-[19.5px] text-foreground leading-relaxed ${tightenWidth ? 'text-left' : 'text-center'}`}
+                              dangerouslySetInnerHTML={{ __html: sanitizeMathHtml(formatInlineMd(line)) }}
+                            />
                           ))}
                         </div>
                       </div>
@@ -901,20 +940,17 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
                               return (
                                 <div key={lIdx} className="flex gap-3 items-start text-lg text-foreground leading-relaxed">
                                   <div className="w-1.5 h-1.5 rounded-full bg-primary/40 mt-2 flex-shrink-0" />
-                                  <span>
-                                    {content.split('**').map((part, i) =>
-                                      i % 2 === 1 ? <strong key={i} className="text-foreground">{part}</strong> : part
-                                    )}
-                                  </span>
+                                  <span dangerouslySetInnerHTML={{ __html: sanitizeMathHtml(formatInlineMd(content)) }} />
                                 </div>
                               )
                             }
                             return (
-                              <p dir="auto" key={lIdx} className="text-lg text-foreground leading-relaxed">
-                                {line.split('**').map((part, i) =>
-                                  i % 2 === 1 ? <strong key={i} className="text-foreground">{part}</strong> : part
-                                )}
-                              </p>
+                              <p
+                                dir="auto"
+                                key={lIdx}
+                                className="text-lg text-foreground leading-relaxed"
+                                dangerouslySetInnerHTML={{ __html: sanitizeMathHtml(formatInlineMd(line)) }}
+                              />
                             )
                           })}
                         </CollapsibleContent>
@@ -2258,9 +2294,10 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                           <Badge variant="outline" className="text-xs">
                             {question.type === 'mcq' ? 'MCQ' : 'True/False'}
                           </Badge>
-                          <p className="font-medium text-foreground">
-                            {index + 1}. {question.question}
-                          </p>
+                          <p
+                            className="font-medium text-foreground"
+                            dangerouslySetInnerHTML={{ __html: `${index + 1}. ` + sanitizeMathHtml(formatInlineMd(question.question)) }}
+                          />
                         </div>
                         <p className="text-sm text-muted-foreground">
                           Your answer: <span className="font-medium">{answer?.user_answer || 'Not answered'}</span>
@@ -2305,9 +2342,10 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                   <Badge variant="secondary" className="text-xs flex-shrink-0">
                     {question.type === 'mcq' ? 'MCQ' : 'T/F'}
                   </Badge>
-                  <p className="font-medium text-foreground">
-                    {index + 1}. {question.question}
-                  </p>
+                  <p
+                    className="font-medium text-foreground"
+                    dangerouslySetInnerHTML={{ __html: `${index + 1}. ` + sanitizeMathHtml(formatInlineMd(question.question)) }}
+                  />
                 </div>
                 {question.type === 'mcq' ? (
                   <RadioGroup
@@ -2318,9 +2356,11 @@ function QuizTab({ materialId, sourceType, topic, materialTitle, isGenerating, s
                     {question.options?.map((option, optIndex) => (
                       <div key={optIndex} className="flex items-center space-x-2">
                         <RadioGroupItem value={option} id={`${question.id}-${optIndex}`} />
-                        <Label htmlFor={`${question.id}-${optIndex}`} className="cursor-pointer flex-1">
-                          {option}
-                        </Label>
+                        <Label
+                          htmlFor={`${question.id}-${optIndex}`}
+                          className="cursor-pointer flex-1"
+                          dangerouslySetInnerHTML={{ __html: sanitizeMathHtml(formatInlineMd(option)) }}
+                        />
                       </div>
                     ))}
                   </RadioGroup>
