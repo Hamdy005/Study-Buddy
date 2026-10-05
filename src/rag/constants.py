@@ -1,10 +1,30 @@
+import os
+
+# ── Embeddings & Batching ──────────────────────────────
 EMBEDDING_DIM = 384
 
 BATCH_MAX_SIZE = 8
 BATCH_WINDOW_S = 0.05
 WARMUP_INTERVAL_S = 300
 
-# Web search — now driven by agentic tool selection.
+# ── Reranker Configuration ──────────────────────────────
+RERANKER_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
+RERANKER_MAX_LENGTH = 1024
+RERANKER_OVER_RETRIEVAL_FACTOR = 3      # Retrieve TOP_K * 3 candidate chunks before reranking
+SIMILARITY_MATCH_THRESHOLD = 0.35        # Vector cosine similarity cutoff for RPC match_material_chunks
+ENABLE_RERANKER = True                  # Cross-encoder reranker runs on ensemble results
+
+# ── Hybrid Ensemble Retrieval Configuration (Vector + BM25) ──
+VECTOR_SEARCH_WEIGHT = 0.60             # Weight (60%) for semantic vector search in ensemble
+BM25_SEARCH_WEIGHT = 0.40               # Weight (40%) for keyword BM25 search in ensemble
+ENSEMBLE_RRF_C = 60                     # Smoothing constant (c) for Reciprocal Rank Fusion
+ENSEMBLE_OVER_RETRIEVAL_FACTOR = 3     # Retrieve top_k * 3 candidate chunks from each retriever
+BM25_K1 = 1.5                           # BM25 term frequency saturation parameter
+BM25_B = 0.75                           # BM25 document length normalization parameter
+BM25_CACHE_TTL_SECONDS = 300            # In-memory cache TTL for tokenized material chunks (5 mins)
+DEFAULT_RETRIEVAL_TOOL = "ensemble_and_reranker"
+
+# ── Web search — now driven by agentic tool selection ───
 # Summary & Quiz topic limits (Gemini 3.5 Flash Lite — high context window)
 WIKI_DOC_CONTENT_CHARS_SUMMARY = 5000
 DUCKDUCKGO_DOC_CONTENT_CHARS_SUMMARY = 5000
@@ -19,9 +39,32 @@ WIKI_TOP_K_RESULTS = 1
 DUCKDUCKGO_NUM_RESULTS = 5
 ARXIV_TOP_K_RESULTS = 1
 
-# RAG & Memory Configuration
+# ── RAG & Memory Configuration ──────────────────────────
 MEMORY_WINDOW_SIZE = 8                  # Number of previous conversation turns preserved in memory window
 TOP_K_CHUNKS = 4                         # Number of top relevant material chunks retrieved for context
+
+# ── Observability & Tracing Configuration (LangSmith) ────
+DEFAULT_LANGSMITH_PROJECT = "study-buddy"
+DEFAULT_ENVIRONMENT = "production"
+PROMPT_VERSION = "v1.0"                  # Bump when RAG_PROMPT_TEMPLATE_BASE changes so traces are filterable
+ARABIC_CHAR_RATIO_THRESHOLD = 0.15
+
+# Gemini Request Tracker Configuration
+GEMINI_FREE_REQUESTS_LIMIT = int(os.environ.get("GEMINI_FREE_REQUESTS_LIMIT", "1000"))
+GEMINI_COUNT_KEY_TTL_SECONDS = 86400 * 2  # 2 days Redis TTL for daily request counters
+
+GEMINI_MODELS = {
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+}
+
+# Cost table (USD per 1 000 tokens)
+COST_PER_1K: dict[str, tuple[float, float]] = {
+    # model_name            : (input_usd, output_usd)
+    "ministral-8b-latest"   : (0.0001,   0.0001),
+    "gemini-3.5-flash-lite" : (0.000075, 0.0003),
+    "gemini-3.1-flash-lite" : (0.000075, 0.0003),
+}
 
 REFUSAL_PREFIXES = (
     "I can't respond on a gibberish",

@@ -39,7 +39,14 @@ from .constants import (
     ARXIV_DOC_CONTENT_CHARS_SUMMARY,
     MEMORY_WINDOW_SIZE,
     TOP_K_CHUNKS,
+    RERANKER_OVER_RETRIEVAL_FACTOR,
+    SIMILARITY_MATCH_THRESHOLD,
+    VECTOR_SEARCH_WEIGHT,
+    BM25_SEARCH_WEIGHT,
+    DEFAULT_RETRIEVAL_TOOL,
 )
+from .ensemble import get_ensemble_retriever
+from .reranker import rerank_dicts
 from .schemas import EmbeddingJob
 
 
@@ -143,24 +150,36 @@ async def store_embeddings_async(material_id: str, chunk_ids: list[str], chunks:
 
 
 def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
-    embedder = get_embedder()
-    query_embedding = embedder.embed_query(query)
+    """Retrieve top_k chunks using Ensemble Retrieval followed by Reranking.
 
-    db = get_supabase()
-    if db is None:
+    1. Ensemble Retrieval: invokes LangChain's EnsembleRetriever (Vector 60% + BM25 40%)
+       to retrieve and fuse candidate documents.
+    2. Cross-Encoder Reranking: scores the candidate chunks against the query using
+       the Jina reranker model and returns the final top_k chunks.
+    """
+    if not query or not material_id:
         return []
 
-    result = db.rpc(
-        "match_material_chunks",
-        {
-            "query_embedding": query_embedding,
-            "match_material_id": material_id,
-            "match_threshold": 0.35,
-            "match_count": k,
-        },
-    ).execute()
+    fetch_k = k * RERANKER_OVER_RETRIEVAL_FACTOR
 
-    return result.data   # each dict has keys: content, chunk_id, similarity
+    # 1. Ensemble retrieval call in rag.py (retrieves from Vector 60% and BM25 40%)
+    ensemble_retriever = get_ensemble_retriever(material_id=material_id, k=k)
+    docs = ensemble_retriever.invoke(query)
+    if not docs:
+        return []
+
+    # Take top (k * 3) ensemble-ranked candidate chunks to pass to reranking
+    candidates = [
+        {
+            "content": doc.page_content,
+            "chunk_id": doc.metadata.get("chunk_id"),
+            "similarity": float(doc.metadata.get("similarity", 0.0)),
+        }
+        for doc in docs[:fetch_k]
+    ]
+
+    # 2. Reranker call in rag.py: scores the (k * 3) candidates and returns top_k (e.g. 4)
+    return rerank_dicts(query=query, records=candidates, top_k=k)
 
 
 # ── LLM ────────────────────────────────────────────────
@@ -567,6 +586,10 @@ class SupabaseRetriever(BaseRetriever):
         return [
             Document(page_content=r["content"], metadata={
                 "similarity": r.get("similarity"),
+                "ensemble_score": r.get("ensemble_score"),
+                "rerank_score": r.get("rerank_score"),
+                "vector_rank": r.get("vector_rank"),
+                "bm25_rank": r.get("bm25_rank"),
                 "chunk_id": r.get("chunk_id"),
             })
             for r in results
@@ -651,12 +674,12 @@ def rag_answer(
     retrieval_scores: list[float] = []
 
     if not is_topic:
-        # --- Material-based query (PDF/URL): vector similarity search ---
+        # --- Material-based query (PDF/URL): hybrid ensemble search (60% vector + 40% BM25) ---
         results = similarity_search(query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
             retrieval_chunks = [r["content"] for r in results]
-            retrieval_scores = [float(r.get("similarity", 0.0)) for r in results]
+            retrieval_scores = [float(r.get("ensemble_score", r.get("rerank_score", r.get("similarity", 0.0)))) for r in results]
             chunks = retrieval_chunks
             context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
 
@@ -680,7 +703,7 @@ def rag_answer(
             query       = query,
             chunks      = retrieval_chunks,
             scores      = retrieval_scores,
-            tool_chosen = "vector_similarity",
+            tool_chosen = DEFAULT_RETRIEVAL_TOOL,
         )
 
     subject_title = mat.get("title") if mat and mat.get("title") else ""
@@ -858,12 +881,12 @@ async def rag_answer_stream(
     retrieval_scores: list[float] = []
 
     if not is_topic:
-        # --- Material-based query (PDF/URL): vector similarity search ---
+        # --- Material-based query (PDF/URL): hybrid ensemble search (60% vector + 40% BM25) ---
         results = await asyncio.to_thread(similarity_search, query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
             retrieval_chunks = [r["content"] for r in results]
-            retrieval_scores = [float(r.get("similarity", 0.0)) for r in results]
+            retrieval_scores = [float(r.get("ensemble_score", r.get("rerank_score", r.get("similarity", 0.0)))) for r in results]
             chunks = retrieval_chunks
             context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
 
@@ -887,7 +910,7 @@ async def rag_answer_stream(
             query       = query,
             chunks      = retrieval_chunks,
             scores      = retrieval_scores,
-            tool_chosen = "vector_similarity",
+            tool_chosen = DEFAULT_RETRIEVAL_TOOL,
         )
 
     subject_title = mat.get("title") if mat and mat.get("title") else ""

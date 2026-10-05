@@ -67,28 +67,19 @@ def _get_client():
         return None
 
 
-# ── Cost table (USD per 1 000 tokens) ────────────────────────────────────────
-# Update these when provider pricing changes.
+from src.rag.constants import (
+    ARABIC_CHAR_RATIO_THRESHOLD,
+    COST_PER_1K,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_LANGSMITH_PROJECT,
+    GEMINI_COUNT_KEY_TTL_SECONDS,
+    GEMINI_FREE_REQUESTS_LIMIT,
+    GEMINI_MODELS,
+    PROMPT_VERSION,
+)
 
-_COST_PER_1K: dict[str, tuple[float, float]] = {
-    # model_name            : (input_usd, output_usd)
-    "ministral-8b-latest"   : (0.0001,   0.0001),
-    "gemini-3.5-flash-lite" : (0.000075, 0.0003),
-    "gemini-3.1-flash-lite" : (0.000075, 0.0003),
-}
-
-# The two Gemini models currently on the free quota / request-based tier
-GEMINI_MODELS = {
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-}
-
-# Gemini free quota limit (requests per day).
-# If daily requests exceed 1 000, usage automatically converts to token-based pricing.
-GEMINI_FREE_REQUESTS_LIMIT = int(os.environ.get("GEMINI_FREE_REQUESTS_LIMIT", "1000"))
-
-# Bump this whenever RAG_PROMPT_TEMPLATE_BASE changes so traces are filterable by version.
-PROMPT_VERSION = "v1.0"
+# Backwards compatibility aliases
+_COST_PER_1K = COST_PER_1K
 
 _local_request_counts: dict[str, int] = {}
 _lock = threading.Lock()
@@ -117,9 +108,9 @@ def record_gemini_request(model: str) -> dict:
         r = get_redis()
         if r is not None:
             count = int(r.incr(key))
-            r.expire(key, 86400 * 2)
+            r.expire(key, GEMINI_COUNT_KEY_TTL_SECONDS)
             r.incr(total_key)
-            r.expire(total_key, 86400 * 2)
+            r.expire(total_key, GEMINI_COUNT_KEY_TTL_SECONDS)
         else:
             with _lock:
                 _local_request_counts[key] = _local_request_counts.get(key, 0) + 1
@@ -190,7 +181,7 @@ def _detect_language(text: str) -> str:
     if not text:
         return "unknown"
     arabic_chars = len(re.findall(r"[\u0600-\u06FF]", text))
-    if arabic_chars / max(len(text), 1) > 0.15:
+    if arabic_chars / max(len(text), 1) > ARABIC_CHAR_RATIO_THRESHOLD:
         return "ar"
     return "en"
 
@@ -233,8 +224,8 @@ class ChatTracer:
         if not self._client:
             return self.run_id
 
-        project     = os.environ.get("LANGSMITH_PROJECT", "study-buddy")
-        environment = os.environ.get("ENVIRONMENT", "production")
+        project     = os.environ.get("LANGSMITH_PROJECT", DEFAULT_LANGSMITH_PROJECT)
+        environment = os.environ.get("ENVIRONMENT", DEFAULT_ENVIRONMENT)
 
         metadata = {
             "user_id":        self.user_id,

@@ -1,5 +1,5 @@
-# pyrefly: ignore [missing-import]
 import re
+# pyrefly: ignore [missing-import]
 import pdfplumber
 from loguru import logger
 from langchain_text_splitters import RecursiveCharacterTextSplitter
