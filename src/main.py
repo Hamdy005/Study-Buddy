@@ -43,11 +43,21 @@ async def lifespan(app: FastAPI):
 
 
     try:
-        from src.rag.rag import get_embedder
+        from src.rag.rag import get_embedder, warmup_embedder
         get_embedder()
-        logger.info("Embedder loaded successfully.")
+        warmup_embedder()
+        logger.info("Embedder loaded and warmed up successfully.")
     except Exception as e:
         logger.warning(f"Embedder failed to load: {e}")
+
+    # Eagerly load and warm up reranker model at startup
+    try:
+        from src.rag.reranker import get_reranker, warmup_reranker
+        get_reranker()
+        warmup_reranker()
+        logger.info("Reranker loaded and warmed up successfully at startup.")
+    except Exception as e:
+        logger.warning(f"Reranker failed to load or warmup at startup: {e}")
 
     # Eagerly load ASR models so warmup runs at startup, not on first request
     try:

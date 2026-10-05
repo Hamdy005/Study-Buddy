@@ -8,12 +8,23 @@ class SearchInput(BaseModel):
     query: str = Field(description="The search query or topic to look up")
 
 
-# Batch worker job dataclass
+# Batch worker job dataclasses
 @dataclass
 class EmbeddingJob:
     """Batch embedding of multiple texts (for store_embeddings)."""
     job_id: str
     texts: list[str]
+    done: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass
+class RerankJob:
+    """Batch reranking of query-candidate pairs across concurrent requests."""
+    job_id: str
+    query: str
+    records: list[dict[str, Any]]
+    top_k: int
+    content_key: str = "content"
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 

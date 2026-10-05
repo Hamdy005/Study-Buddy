@@ -47,6 +47,7 @@ from .constants import (
 )
 from .ensemble import get_ensemble_retriever
 from .reranker import rerank_dicts
+from .batch_workers import rerank_batch, rerank_async
 from .schemas import EmbeddingJob
 
 
@@ -154,8 +155,8 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
 
     1. Ensemble Retrieval: invokes LangChain's EnsembleRetriever (Vector 60% + BM25 40%)
        to retrieve and fuse candidate documents.
-    2. Cross-Encoder Reranking: scores the candidate chunks against the query using
-       the Jina reranker model and returns the final top_k chunks.
+    2. Cross-Encoder Reranking: scores candidate chunks against the query using
+       the batched Jina reranker worker (or direct reranker fallback) and returns top_k chunks.
     """
     if not query or not material_id:
         return []
@@ -178,8 +179,35 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
         for doc in docs[:fetch_k]
     ]
 
-    # 2. Reranker call in rag.py: scores the (k * 3) candidates and returns top_k (e.g. 4)
-    return rerank_dicts(query=query, records=candidates, top_k=k)
+    # 2. Reranker call in rag.py: batch worker scores candidates across concurrent requests
+    return rerank_batch(query=query, records=candidates, top_k=k)
+
+
+async def similarity_search_async(query: str, material_id: str, k: int = 5) -> list[dict]:
+    """Retrieve top_k chunks asynchronously using Ensemble Retrieval and batch reranking."""
+    if not query or not material_id:
+        return []
+
+    fetch_k = k * RERANKER_OVER_RETRIEVAL_FACTOR
+
+    # 1. Ensemble retrieval call in rag.py (retrieves from Vector 60% and BM25 40%)
+    ensemble_retriever = get_ensemble_retriever(material_id=material_id, k=k)
+    docs = await ensemble_retriever.ainvoke(query)
+    if not docs:
+        return []
+
+    # Take top (k * 3) ensemble-ranked candidate chunks to pass to reranking
+    candidates = [
+        {
+            "content": doc.page_content,
+            "chunk_id": doc.metadata.get("chunk_id"),
+            "similarity": float(doc.metadata.get("similarity", 0.0)),
+        }
+        for doc in docs[:fetch_k]
+    ]
+
+    # 2. Async batch reranker call in rag.py
+    return await rerank_async(query=query, records=candidates, top_k=k)
 
 
 # ── LLM ────────────────────────────────────────────────
@@ -882,7 +910,7 @@ async def rag_answer_stream(
 
     if not is_topic:
         # --- Material-based query (PDF/URL): hybrid ensemble search (60% vector + 40% BM25) ---
-        results = await asyncio.to_thread(similarity_search, query, material_id, k=TOP_K_CHUNKS)
+        results = await similarity_search_async(query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
             retrieval_chunks = [r["content"] for r in results]

@@ -30,13 +30,13 @@ _RERANKER_MODEL = RERANKER_MODEL
 
 
 @lru_cache(maxsize=1)
-def _get_reranker():
+def get_reranker():
     """Lazily load and cache the Jina reranker model on first call.
 
     Uses AutoModelForSequenceClassification with trust_remote_code=True,
     as required by the Jina v2 reranker architecture.
     Runs on CPU; the model is 278 M params but inference on short chunks
-    is fast enough for synchronous per-turn use.
+    is fast enough for per-turn use.
     """
     from transformers import AutoModelForSequenceClassification
     import torch
@@ -52,6 +52,44 @@ def _get_reranker():
     return model
 
 
+_get_reranker = get_reranker
+
+
+def warmup_reranker():
+    """Warmup forward pass for Jina reranker to prime PyTorch/OpenMP thread pools."""
+    try:
+        model = get_reranker()
+        import torch
+
+        with torch.no_grad():
+            model.compute_score([["warmup query", "warmup document"]], max_length=64)
+        logger.info("Reranker warmup completed successfully.")
+    except Exception as exc:
+        logger.warning(f"Reranker warmup failed (non-fatal): {exc}")
+
+
+def _score_pairs_batch(pairs: list[list[str]]) -> list[float]:
+    """Batch score arbitrary (query, text) pairs in a single forward pass."""
+    if not pairs:
+        return []
+
+    import torch
+
+    model = get_reranker()
+    with torch.no_grad():
+        scores = model.compute_score(pairs, max_length=RERANKER_MAX_LENGTH)
+
+    if hasattr(scores, "tolist"):
+        scores = scores.tolist()
+    elif isinstance(scores, (float, int)):
+        scores = [float(scores)]
+
+    return [float(s) for s in scores]
+
+
+score_pairs_batch = _score_pairs_batch
+
+
 def _compute_scores(query: str, texts: list[str]) -> Optional[list[float]]:
     """Compute relevance scores for (query, text) pairs using the reranker model.
 
@@ -61,22 +99,8 @@ def _compute_scores(query: str, texts: list[str]) -> Optional[list[float]]:
         return []
 
     try:
-        import torch
-
-        model = _get_reranker()
         pairs = [[query, text] for text in texts]
-
-        with torch.no_grad():
-            scores = model.compute_score(pairs, max_length=RERANKER_MAX_LENGTH)
-
-        # Handle tensor, numpy array, list, or scalar
-        if hasattr(scores, "tolist"):
-            scores = scores.tolist()
-        elif isinstance(scores, (float, int)):
-            scores = [float(scores)]
-
-        return [float(s) for s in scores]
-
+        return _score_pairs_batch(pairs)
     except Exception as exc:
         logger.warning(
             f"Reranker inference failed ({type(exc).__name__}: {exc}). "

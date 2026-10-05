@@ -13,6 +13,8 @@ RERANKER_MAX_LENGTH = 1024
 RERANKER_OVER_RETRIEVAL_FACTOR = 3      # Retrieve TOP_K * 3 candidate chunks before reranking
 SIMILARITY_MATCH_THRESHOLD = 0.35        # Vector cosine similarity cutoff for RPC match_material_chunks
 ENABLE_RERANKER = True                  # Cross-encoder reranker runs on ensemble results
+RERANK_BATCH_MAX_SIZE = 8               # Max concurrent reranking jobs batched together
+RERANK_BATCH_WINDOW_S = 0.05            # Micro-batch collection window (50ms)
 
 # ── Hybrid Ensemble Retrieval Configuration (Vector + BM25) ──
 VECTOR_SEARCH_WEIGHT = 0.60             # Weight (60%) for semantic vector search in ensemble
