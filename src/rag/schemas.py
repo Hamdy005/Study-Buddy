@@ -33,6 +33,22 @@ class TutorResponse(BaseModel):
     source: str
     time_taken: float
     memory_id: str
+    run_id: Optional[str] = None   # LangSmith trace ID — used by the feedback endpoint
+
+
+class FeedbackRequest(BaseModel):
+    """
+    Payload for POST /api/tutor/feedback.
+
+    Frontend TODO
+    ─────────────
+    After receiving a chat response, render 👍 / 👎 buttons next to the
+    assistant message. On click, POST this payload to /api/tutor/feedback.
+    Disable both buttons after the first submission to prevent double-voting.
+    """
+    run_id:  str
+    score:   int            # +1 = thumbs-up  /  -1 = thumbs-down
+    comment: Optional[str] = None   # optional free-text reason
 
 
 # Chat session models

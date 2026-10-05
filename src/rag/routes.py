@@ -9,6 +9,7 @@ from typing import Optional, Any
 from src.config import settings
 from src.database import get_supabase, get_auth_supabase
 from src.rag.rag import rag_answer, extract_chat_title, rag_answer_stream
+from src.rag.tracing import ChatTracer, post_user_feedback
 from src.rag.constants import REFUSAL_PREFIXES
 from src.dependencies import get_current_user, get_current_user_id, DEV_USER_ID, _verify_token_cached
 from src.store import (
@@ -22,7 +23,7 @@ from src.store import (
     save_chat_messages, get_chat_messages,
 )
 from src.summary_generator.summary import clean_summary
-from .schemas import TutorQuery, TutorResponse, SessionRequest, RenameSessionRequest, ExtractTitleRequest, SaveChatRequest
+from .schemas import TutorQuery, TutorResponse, SessionRequest, RenameSessionRequest, ExtractTitleRequest, SaveChatRequest, FeedbackRequest
 
 router = APIRouter(prefix="/api/tutor", tags=["Tutor"])
 ws_router = APIRouter(tags=["WebSocket Chat"])
@@ -172,6 +173,15 @@ async def websocket_chat(websocket: WebSocket):
             except Exception as e:
                 logger.warning(f"Failed to append user session message: {e}")
 
+        # ── Create per-turn tracer ─────────────────────────────────
+        tracer = ChatTracer(
+            user_id     = user_id,
+            session_id  = session_id,
+            material_id = material_id,
+            feature     = "ws_chat",
+        )
+        tracer.start(query, source_type=source_type)
+
         # Summary fallback
         summary_text = ""
         if material_id:
@@ -186,16 +196,13 @@ async def websocket_chat(websocket: WebSocket):
                 material_id=material_id,
                 summaries=summary_text,
                 memory=memory,
+                tracer=tracer,
             ):
                 full_answer_parts.append(token_chunk)
                 await websocket.send_text(token_chunk)
 
-            # Send special completion signal
-            await websocket.send_text("[DONE]")
-
             full_answer = "".join(full_answer_parts)
             cleaned_answer = clean_summary(full_answer)
-
             is_refusal = any(cleaned_answer.strip().startswith(p) for p in REFUSAL_PREFIXES)
 
             # Persist assistant response if not a refusal
@@ -209,9 +216,17 @@ async def websocket_chat(websocket: WebSocket):
                 append_memory_message(memory_id, "user", query)
                 append_memory_message(memory_id, "assistant", cleaned_answer)
 
+            # Finish parent trace; send run_id so the frontend can post feedback
+            if tracer:
+                tracer.finish(cleaned_answer)
+            await websocket.send_json({"type": "done", "run_id": tracer.run_id if tracer else None})
+
         except Exception as e:
             logger.error(f"Error during WS chat streaming for user {user_id}: {e}", exc_info=True)
+            if tracer:
+                tracer.finish_error(e)
             await websocket.send_json({"type": "error", "message": f"Error generating answer: {str(e)}"})
+
 
 
 
@@ -244,6 +259,14 @@ async def ask_tutor(
             pass
 
     start = time.time()
+    tracer = ChatTracer(
+        user_id     = user_id,
+        session_id  = body.session_id,
+        material_id = body.material_id,
+        feature     = "rag_chat",
+    )
+    tracer.start(body.query, source_type=body.source_type)
+
     try:
         loop = asyncio.get_event_loop()
         if body.source_type in ("pdf", "url"):
@@ -254,19 +277,20 @@ async def ask_tutor(
                 raise HTTPException(403, "Access denied")
 
             material_id = body.material_id
-            
+
             # Fetch summary to be used as fallback in rag_answer
             mat_summary = get_summary(material_id)
             summary_text = mat_summary.get("summary", "") if mat_summary else ""
 
             # Use rag_answer for both "ready" and other statuses (if chunks exist)
             answer, memory = await loop.run_in_executor(
-                None, 
+                None,
                 lambda: rag_answer(
-                    query=body.query, 
-                    material_id=material_id, 
+                    query=body.query,
+                    material_id=material_id,
                     memory=memory,
-                    summaries=summary_text
+                    summaries=summary_text,
+                    tracer=tracer,
                 )
             )
             source = f"{body.source_type.upper()} (embeddings vector)"
@@ -274,12 +298,13 @@ async def ask_tutor(
         else:
             answer, memory = await loop.run_in_executor(
                 None,
-                lambda: rag_answer(query=body.query, material_id=body.material_id, memory=memory)
+                lambda: rag_answer(query=body.query, material_id=body.material_id, memory=memory, tracer=tracer)
             )
             source = "Web Search"
 
     except Exception as e:
         logger.error(f"Error in ask_tutor: {str(e)}", exc_info=True)
+        tracer.finish_error(e)
         raise HTTPException(500, f"Error generating answer: {e}")
 
     cleaned_answer = clean_summary(answer)
@@ -300,7 +325,49 @@ async def ask_tutor(
         append_memory_message(memory_id, "user", body.query.strip())
         append_memory_message(memory_id, "assistant", cleaned_answer)
 
-    return TutorResponse(answer=cleaned_answer, source=source, time_taken=elapsed, memory_id=memory_id)
+    # Close parent trace
+    tracer.finish(cleaned_answer)
+
+    return TutorResponse(
+        answer=cleaned_answer,
+        source=source,
+        time_taken=elapsed,
+        memory_id=memory_id,
+        run_id=tracer.run_id,
+    )
+
+
+# ── Feedback endpoint ──────────────────────────────────────────────────────────
+
+
+@router.post("/feedback")
+async def submit_feedback(
+    body: FeedbackRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Store a user thumbs-up / thumbs-down signal on a LangSmith trace.
+
+    Frontend TODO
+    ─────────────
+    1. After each assistant message is displayed, render 👍 / 👎 buttons.
+    2. Read `run_id` from:
+       - HTTP: TutorResponse.run_id
+       - WebSocket: the `run_id` field in the {"type":"done"} JSON event
+    3. On click POST { "run_id": "...", "score": 1 | -1, "comment": "..." }
+       to /api/tutor/feedback.  Disable both buttons after the first submission.
+    4. Show a brief "Thanks for your feedback!" toast on 200 OK.
+    """
+    if body.score not in (1, -1):
+        raise HTTPException(400, "score must be +1 (like) or -1 (dislike)")
+
+    ok = post_user_feedback(
+        run_id  = body.run_id,
+        score   = body.score,
+        comment = body.comment,
+        user_id = user_id,
+    )
+    return {"status": "ok" if ok else "tracing_disabled"}
 
 
 # ── Chat Session Routes ──────────────────────────────────

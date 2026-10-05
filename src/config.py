@@ -72,6 +72,11 @@ class Settings:
     # This avoids the 403 "Session does not exist" error from stateful get_user() calls.
     supabase_jwt_secret: str = os.getenv("SUPABASE_JWT_SECRET", "")
 
+    # ── Observability (LangSmith) ──────────────────────────────────────────────
+    # Obtain your API key at https://smith.langchain.com → Settings → API Keys
+    langsmith_api_key: str  = os.getenv("LANGSMITH_API_KEY", "")
+    langsmith_project: str  = os.getenv("LANGSMITH_PROJECT", "study-buddy")
+
 
 @lru_cache()
 def get_settings() -> Settings:

@@ -1,6 +1,7 @@
 import os
 import asyncio
 import uuid
+import time
 import concurrent.futures
 from loguru import logger
 from functools import lru_cache
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from duckduckgo_search import DDGS
 from langchain_community.utilities import WikipediaAPIWrapper, ArxivAPIWrapper
 from langchain_core.tools import StructuredTool
+from src.rag.tracing import ChatTracer, record_gemini_request
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -147,7 +149,7 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
     db = get_supabase()
     if db is None:
         return []
-    
+
     result = db.rpc(
         "match_material_chunks",
         {
@@ -158,7 +160,7 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
         },
     ).execute()
 
-    return result.data
+    return result.data   # each dict has keys: content, chunk_id, similarity
 
 
 # ── LLM ────────────────────────────────────────────────
@@ -400,6 +402,7 @@ def _agentic_gather_web_content(
     is_topic: bool,
     existing_doc_context: str = "",
     subject_title: str = "",
+    tracer: Optional[ChatTracer] = None,
 ) -> tuple[str, bool, bool, bool]:
     """
     Core agentic routing engine.
@@ -413,6 +416,7 @@ def _agentic_gather_web_content(
         existing_doc_context: For PDF/URL chatbot — the already-retrieved vector chunks
                               so the router can decide if web enrichment is needed.
         subject_title:       Material title, appended to web search queries for accuracy.
+        tracer:              Optional per-turn ChatTracer instance.
 
     Returns:
         (combined_content, has_wiki, has_ddg, has_arxiv)
@@ -461,6 +465,19 @@ def _agentic_gather_web_content(
 
         router_response = llm_with_tools.invoke(messages)
         selected_calls = getattr(router_response, "tool_calls", []) or []
+
+        # Log Gemini router invocation (gemini-3.5-flash-lite)
+        if tracer:
+            usage = getattr(router_response, "usage_metadata", None) or {}
+            tracer.log_llm_call(
+                model          = "gemini-3.5-flash-lite",
+                prompt_text    = f"User query: {query}\nSubject: {subject_title}",
+                model_settings = {"temperature": 0.3, "max_output_tokens": 4000},
+                usage          = usage,
+                role           = "router",
+            )
+        else:
+            record_gemini_request("gemini-3.5-flash-lite")
 
     except Exception as e:
         logger.warning(f"Agentic router LLM failed ({e}); falling back to default tool selection.")
@@ -609,6 +626,7 @@ def rag_answer(
     chunks: Optional[list[str]] = None,
     summaries: str = "",
     memory = None,
+    tracer: Optional[ChatTracer] = None,
 ):
     if memory is None:
         memory = ConversationBufferWindowMemory(
@@ -629,12 +647,17 @@ def rag_answer(
     if mat and mat.get("title"):
         context_parts.append(f"Subject / Topic: {mat.get('title')}")
 
+    retrieval_chunks: list[str] = []
+    retrieval_scores: list[float] = []
+
     if not is_topic:
         # --- Material-based query (PDF/URL): vector similarity search ---
         results = similarity_search(query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
-            chunks = [r["content"] for r in results]
+            retrieval_chunks = [r["content"] for r in results]
+            retrieval_scores = [float(r.get("similarity", 0.0)) for r in results]
+            chunks = retrieval_chunks
             context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
 
         # Fallback: summary
@@ -651,6 +674,15 @@ def rag_answer(
                 sampled_text = "\n---\n".join(c["content"] for c in sampled)
                 context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
 
+    # Log retrieval span (only for PDF/URL turns that hit vector search)
+    if tracer and retrieval_chunks:
+        tracer.log_retrieval(
+            query       = query,
+            chunks      = retrieval_chunks,
+            scores      = retrieval_scores,
+            tool_chosen = "vector_similarity",
+        )
+
     subject_title = mat.get("title") if mat and mat.get("title") else ""
 
     # Build existing doc context string for the router (PDF/URL only)
@@ -662,9 +694,23 @@ def rag_answer(
         is_topic=is_topic,
         existing_doc_context=existing_doc_context,
         subject_title=subject_title,
+        tracer=tracer,
     )
     if web_content:
         context_parts.append(web_content)
+
+    # Log agentic web gather span
+    if tracer:
+        tools_called = (
+            (["wikipedia_search"] if has_wiki else []) +
+            (["web_search"] if has_ddg else []) +
+            (["arxiv_search"] if has_arxiv else [])
+        )
+        tracer.log_web_gather(
+            query           = query,
+            tools_called    = tools_called,
+            chars_retrieved = len(web_content),
+        )
 
     context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
 
@@ -696,12 +742,27 @@ def rag_answer(
         memory_vars = memory.load_memory_variables({"input": query})
         chat_history = memory_vars.get("chat_history", [])
 
+        llm_start = time.perf_counter()
         response = chain.invoke({
             "input": query,
             "context": context_str,
             "chat_history": chat_history,
             "agent_scratchpad": "",
         })
+        llm_ms = (time.perf_counter() - llm_start) * 1000
+
+        # Log LLM span with token usage and cost
+        if tracer:
+            usage = getattr(response, "usage_metadata", None) or {}
+            tracer.log_llm_call(
+                model           = "ministral-8b-latest",
+                prompt_text     = context_str,
+                model_settings  = {"temperature": 0.3, "max_tokens": 3500},
+                usage           = usage,
+                ttft_ms         = None,   # non-streaming: no TTFT
+                is_fallback     = False,
+                role            = "primary",
+            )
 
         answer = _clean_llm_response(response.content)
         # Only persist non-refusal answers to memory
@@ -710,25 +771,54 @@ def rag_answer(
         return answer, memory
     except Exception as e:
         logger.warning(f"Primary LLM call failed or rate-limited: {e}. Falling back to secondary LLM.")
+        if tracer:
+            tracer.log_error("primary_llm", e)
         try:
             fallback_llm = get_fallback_llm()
             chain = prompt | fallback_llm
             memory_vars = memory.load_memory_variables({"input": query})
             chat_history = memory_vars.get("chat_history", [])
 
+            llm_start = time.perf_counter()
             response = chain.invoke({
                 "input": query,
                 "context": context_str,
                 "chat_history": chat_history,
                 "agent_scratchpad": "",
             })
+
             answer = _clean_llm_response(response.content)
+
+            if tracer:
+                usage = getattr(response, "usage_metadata", None) or {}
+                if not usage.get("output_tokens"):
+                    input_est = max(1, len(context_str + query) // 4)
+                    output_est = max(1, len(answer) // 4)
+                    usage = {
+                        "input_tokens": input_est,
+                        "output_tokens": output_est,
+                        "total_tokens": input_est + output_est,
+                    }
+                tracer.log_llm_call(
+                    model           = "gemini-3.1-flash-lite",
+                    prompt_text     = context_str,
+                    model_settings  = {"temperature": 0.3, "max_output_tokens": 4000},
+                    usage           = usage,
+                    ttft_ms         = None,
+                    is_fallback     = True,
+                    role            = "fallback",
+                )
+            else:
+                record_gemini_request("gemini-3.1-flash-lite")
+
             # Only persist non-refusal answers to memory
             if not _is_refusal(answer):
                 memory.save_context({"input": query}, {"output": answer})
             return answer, memory
         except Exception as fallback_err:
             logger.error(f"Fallback LLM call also failed: {fallback_err}")
+            if tracer:
+                tracer.log_error("fallback_llm", fallback_err)
             raise fallback_err
 
 
@@ -738,6 +828,7 @@ async def rag_answer_stream(
     chunks: Optional[list[str]] = None,
     summaries: str = "",
     memory = None,
+    tracer: Optional[ChatTracer] = None,
 ):
     """
     Async generator that streams LLM response tokens using Mistral AI (with Gemini fallback).
@@ -763,12 +854,17 @@ async def rag_answer_stream(
     if mat and mat.get("title"):
         context_parts.append(f"Subject / Topic: {mat.get('title')}")
 
+    retrieval_chunks: list[str] = []
+    retrieval_scores: list[float] = []
+
     if not is_topic:
         # --- Material-based query (PDF/URL): vector similarity search ---
         results = await asyncio.to_thread(similarity_search, query, material_id, k=TOP_K_CHUNKS)
         if results:
             has_chunks = True
-            chunks = [r["content"] for r in results]
+            retrieval_chunks = [r["content"] for r in results]
+            retrieval_scores = [float(r.get("similarity", 0.0)) for r in results]
+            chunks = retrieval_chunks
             context_parts.append("Relevant Excerpts:\n" + "\n---\n".join(chunks))
 
         # Fallback: summary
@@ -785,6 +881,15 @@ async def rag_answer_stream(
                 sampled_text = "\n---\n".join(c["content"] for c in sampled)
                 context_parts.append(f"Material Sample (No summary found; showing start and end of material):\n{sampled_text}")
 
+    # Log retrieval span (only for PDF/URL turns that hit vector search)
+    if tracer and retrieval_chunks:
+        tracer.log_retrieval(
+            query       = query,
+            chunks      = retrieval_chunks,
+            scores      = retrieval_scores,
+            tool_chosen = "vector_similarity",
+        )
+
     subject_title = mat.get("title") if mat and mat.get("title") else ""
 
     # Build existing doc context string for the router (PDF/URL only)
@@ -797,9 +902,23 @@ async def rag_answer_stream(
         is_topic,
         existing_doc_context,
         subject_title,
+        tracer,
     )
     if web_content:
         context_parts.append(web_content)
+
+    # Log agentic web gather span
+    if tracer:
+        tools_called = (
+            (["wikipedia_search"] if has_wiki else []) +
+            (["web_search"] if has_ddg else []) +
+            (["arxiv_search"] if has_arxiv else [])
+        )
+        tracer.log_web_gather(
+            query           = query,
+            tools_called    = tools_called,
+            chars_retrieved = len(web_content),
+        )
 
     context_str = "\n\n".join(context_parts) if context_parts else "No specific context provided."
 
@@ -827,6 +946,11 @@ async def rag_answer_stream(
     chat_history = memory_vars.get("chat_history", [])
 
     full_answer_parts = []
+    first_token_ts: Optional[float] = None
+    ttft_ms: Optional[float] = None
+    stream_start = time.perf_counter()
+    used_fallback = False
+    stream_usage: dict = {}
 
     try:
         primary_llm = get_llm()
@@ -838,13 +962,25 @@ async def rag_answer_stream(
             "chat_history": chat_history,
             "agent_scratchpad": "",
         }):
+            u = getattr(chunk, "usage_metadata", None)
+            if u:
+                stream_usage = u
             token = _clean_llm_response(chunk.content)
             if token:
+                if first_token_ts is None:
+                    first_token_ts = time.perf_counter()
+                    ttft_ms = (first_token_ts - stream_start) * 1000
                 full_answer_parts.append(token)
                 yield token
 
     except Exception as e:
         logger.warning(f"Primary LLM streaming failed or rate-limited: {e}. Falling back to secondary LLM.")
+        if tracer:
+            tracer.log_error("primary_llm_stream", e)
+        used_fallback = True
+        first_token_ts = None
+        ttft_ms = None
+        stream_start = time.perf_counter()
         try:
             fallback_llm = get_fallback_llm()
             chain = prompt | fallback_llm
@@ -855,15 +991,56 @@ async def rag_answer_stream(
                 "chat_history": chat_history,
                 "agent_scratchpad": "",
             }):
+                u = getattr(chunk, "usage_metadata", None)
+                if u:
+                    stream_usage = u
                 token = _clean_llm_response(chunk.content)
                 if token:
+                    if first_token_ts is None:
+                        first_token_ts = time.perf_counter()
+                        ttft_ms = (first_token_ts - stream_start) * 1000
                     full_answer_parts.append(token)
                     yield token
         except Exception as fallback_err:
             logger.error(f"Fallback LLM streaming failed: {fallback_err}")
+            if tracer:
+                tracer.log_error("fallback_llm_stream", fallback_err)
             raise fallback_err
 
     full_answer = "".join(full_answer_parts)
+
+    # Log LLM span with token usage, TTFT, and dynamic pricing
+    if tracer:
+        model_name = "gemini-3.1-flash-lite" if used_fallback else "ministral-8b-latest"
+        settings_map = (
+            {"temperature": 0.3, "max_output_tokens": 4000}
+            if used_fallback
+            else {"temperature": 0.3, "max_tokens": 3500}
+        )
+        # If streaming provider didn't return usage_metadata, estimate from text
+        if not stream_usage or not stream_usage.get("output_tokens"):
+            input_est = max(1, len(context_str + query) // 4)
+            output_est = max(1, len(full_answer) // 4)
+            stream_usage = {
+                "input_tokens": input_est,
+                "output_tokens": output_est,
+                "total_tokens": input_est + output_est,
+            }
+
+        tracer.log_llm_call(
+            model           = model_name,
+            prompt_text     = context_str,
+            model_settings  = settings_map,
+            usage           = stream_usage,
+            ttft_ms         = ttft_ms,
+            is_fallback     = used_fallback,
+            role            = "fallback" if used_fallback else "primary",
+        )
+        # Wire eval stubs — will be activated when Corrective RAG is integrated
+        tracer.schedule_evals(query=query, answer=full_answer, context=context_str)
+    elif used_fallback:
+        record_gemini_request("gemini-3.1-flash-lite")
+
     if not _is_refusal(full_answer):
         memory.save_context({"input": query}, {"output": full_answer})
 
@@ -890,6 +1067,7 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
             fallback_llm = get_fallback_llm()
             chain = prompt | fallback_llm
             response = chain.invoke({"query": query})
+            record_gemini_request("gemini-3.1-flash-lite")
         except Exception as fallback_err:
             logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
             raise fallback_err
