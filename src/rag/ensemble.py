@@ -100,7 +100,7 @@ class SupabaseVectorRetriever(BaseRetriever):
 
 def get_vector_retriever(material_id: str, k: int = 12) -> SupabaseVectorRetriever:
     """Return a LangChain vector similarity retriever for the given material."""
-    return SupabaseVectorRetriever(material_id=material_id, k=k)
+    return SupabaseVectorRetriever(material_id=material_id, k=max(1, int(round(k))))
 
 
 # ── 2. BM25 Search (LangChain BM25Retriever with Caching) ─────────────────────
@@ -111,6 +111,7 @@ _BM25_CACHE: dict[str, tuple[float, Any]] = {}
 
 def get_bm25_retriever(material_id: str, k: int = 12) -> Optional[BaseRetriever]:
     """Return a cached LangChain BM25Retriever for the specified material's chunks."""
+    k = max(1, int(round(k)))
     now = time.time()
 
     # Clean up stale cache entries
@@ -172,7 +173,8 @@ def get_ensemble_retriever(
     Retrieves top_k * ENSEMBLE_OVER_RETRIEVAL_FACTOR candidates from each sub-retriever
     and fuses them using weighted Reciprocal Rank Fusion (RRF).
     """
-    fetch_k = k * ENSEMBLE_OVER_RETRIEVAL_FACTOR
+    k = max(1, int(round(k)))
+    fetch_k = max(1, int(round(k * ENSEMBLE_OVER_RETRIEVAL_FACTOR)))
 
     vec_retriever = get_vector_retriever(material_id=material_id, k=fetch_k)
     bm25_retriever = get_bm25_retriever(material_id=material_id, k=fetch_k)

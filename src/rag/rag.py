@@ -165,7 +165,8 @@ def similarity_search(query: str, material_id: str, k: int = 5, tracer: Optional
     if not query or not material_id:
         return []
 
-    fetch_k = k * RERANKER_OVER_RETRIEVAL_FACTOR
+    k = max(1, int(round(k)))
+    fetch_k = max(1, int(round(k * RERANKER_OVER_RETRIEVAL_FACTOR)))
 
     # 1. Ensemble retrieval call in rag.py (retrieves from Vector 60% and BM25 40%)
     ensemble_retriever = get_ensemble_retriever(material_id=material_id, k=k)
@@ -217,7 +218,8 @@ async def similarity_search_async(query: str, material_id: str, k: int = 5, trac
     if not query or not material_id:
         return []
 
-    fetch_k = k * RERANKER_OVER_RETRIEVAL_FACTOR
+    k = max(1, int(round(k)))
+    fetch_k = max(1, int(round(k * RERANKER_OVER_RETRIEVAL_FACTOR)))
 
     # 1. Ensemble retrieval call in rag.py (retrieves from Vector 60% and BM25 40%)
     ensemble_retriever = get_ensemble_retriever(material_id=material_id, k=k)

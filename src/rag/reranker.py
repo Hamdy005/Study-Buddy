@@ -310,7 +310,7 @@ def rerank(
     if isinstance(chunks[0], dict):
         return rerank_dicts(query, chunks, top_k=top_k, tracer=tracer)  # type: ignore[arg-type]
 
-    top_k = min(top_k, len(chunks))
+    top_k = min(max(1, int(round(top_k))), len(chunks))
     if len(chunks) <= 1:
         return chunks[:top_k]
 
@@ -369,7 +369,7 @@ def rerank_dicts(
     if not records:
         return []
 
-    top_k = min(top_k, len(records))
+    top_k = min(max(1, int(round(top_k))), len(records))
     if len(records) <= 1:
         for r in records[:top_k]:
             if "rerank_score" not in r:

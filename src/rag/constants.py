@@ -10,8 +10,8 @@ WARMUP_INTERVAL_S = 300
 # ── Reranker Configuration ──────────────────────────────
 RERANKER_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
 RERANKER_QUANTIZED_MODEL = "Hamdy005/jina-reranker-v2-base-multilingual-int8-onnx"
-RERANKER_MAX_LENGTH = 1024
-RERANKER_OVER_RETRIEVAL_FACTOR = 3       # Retrieve TOP_K * 3 candidate chunks before reranking
+RERANKER_MAX_LENGTH = 512
+RERANKER_OVER_RETRIEVAL_FACTOR = 2.5     # Retrieve TOP_K * 2.5 candidate chunks before reranking
 SIMILARITY_MATCH_THRESHOLD = 0.35        # Vector cosine similarity cutoff for RPC match_material_chunks
 ENABLE_RERANKER = True                  # Cross-encoder reranker runs on ensemble results
 RERANK_BATCH_MAX_SIZE = 8               # Max concurrent reranking jobs batched together

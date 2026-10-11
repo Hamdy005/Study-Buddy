@@ -220,7 +220,8 @@ async def rerank_worker():
                     scored_records.append((float(s), r_copy))
 
                 scored_records.sort(key=lambda x: x[0], reverse=True)
-                top_records = [r for _, r in scored_records[: job.top_k]]
+                k_int = max(1, int(round(job.top_k)))
+                top_records = [r for _, r in scored_records[:k_int]]
 
                 if job.job_id not in job_store:
                     job_store[job.job_id] = {"status": "pending", "result": None, "error": None}
@@ -235,7 +236,8 @@ async def rerank_worker():
             logger.error(f"Reranking batch failed: {e}", exc_info=True)
             for job in batch:
                 fallback_records = []
-                for r in job.records[: job.top_k]:
+                k_int = max(1, int(round(job.top_k)))
+                for r in job.records[:k_int]:
                     r_copy = dict(r)
                     if "rerank_score" not in r_copy:
                         r_copy["rerank_score"] = float(r_copy.get("similarity", 0.0))
@@ -334,6 +336,8 @@ async def rerank_async(
 
     if not records:
         return []
+
+    top_k = max(1, int(round(top_k)))
     if len(records) <= 1 or not _workers_started:
         return rerank_dicts(query, records, top_k=top_k, content_key=content_key)
 
@@ -379,6 +383,8 @@ def rerank_batch(
 
     if not records:
         return []
+
+    top_k = max(1, int(round(top_k)))
     if len(records) <= 1 or not _workers_started or _main_loop is None or not _main_loop.is_running():
         return rerank_dicts(query, records, top_k=top_k, content_key=content_key)
 
