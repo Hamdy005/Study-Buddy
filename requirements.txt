@@ -39,6 +39,7 @@ einops
 sacremoses
 sentencepiece
 omegaconf
+onnxruntime
 
 # ── ASR Models ──────────────────────────────────────────
 nemo_toolkit[asr]

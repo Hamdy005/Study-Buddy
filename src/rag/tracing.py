@@ -76,6 +76,7 @@ from src.rag.constants import (
     GEMINI_FREE_REQUESTS_LIMIT,
     GEMINI_MODELS,
     PROMPT_VERSION,
+    RERANKER_MODEL,
 )
 
 # Backwards compatibility aliases
@@ -260,13 +261,20 @@ class ChatTracer:
         if not self._run_obj:
             return
         try:
+            now = datetime.now(timezone.utc)
+            if hasattr(self._run_obj, "extra") and isinstance(self._run_obj.extra, dict):
+                self._run_obj.extra.setdefault("metadata", {})["latency_ms"] = round(elapsed_ms, 1)
             self._run_obj.end(
-                outputs = {"answer": answer, "used_fallback_llm": used_fallback},
-                extra   = {"latency_ms": round(elapsed_ms, 1)},
+                end_time = now,
+                outputs  = {
+                    "answer": answer,
+                    "used_fallback_llm": used_fallback,
+                    "latency_ms": round(elapsed_ms, 1),
+                },
             )
             self._run_obj.patch()
         except Exception as exc:
-            log.debug(f"LangSmith finish trace failed: {exc}")
+            log.warning(f"LangSmith finish trace failed: {exc}")
 
     def finish_error(self, error: Exception) -> None:
         """Close the parent trace on an unhandled error."""
@@ -274,13 +282,16 @@ class ChatTracer:
         if not self._run_obj:
             return
         try:
+            now = datetime.now(timezone.utc)
+            if hasattr(self._run_obj, "extra") and isinstance(self._run_obj.extra, dict):
+                self._run_obj.extra.setdefault("metadata", {})["latency_ms"] = round(elapsed_ms, 1)
             self._run_obj.end(
-                error = f"{type(error).__name__}: {error}",
-                extra = {"latency_ms": round(elapsed_ms, 1)},
+                end_time = now,
+                error    = f"{type(error).__name__}: {error}",
             )
             self._run_obj.patch()
         except Exception as exc:
-            log.debug(f"LangSmith finish_error trace failed: {exc}")
+            log.warning(f"LangSmith finish_error trace failed: {exc}")
 
     # ── Child spans ───────────────────────────────────────────────────────────
 
@@ -310,6 +321,122 @@ class ChatTracer:
             child.post()
         except Exception as exc:
             log.debug(f"LangSmith log_retrieval failed: {exc}")
+
+    def start_rerank_span(
+        self,
+        query:          str,
+        num_candidates: int,
+        top_k:          int,
+        model:          Optional[str] = None,
+    ):
+        """Begin a child span in LangSmith for cross-encoder reranking."""
+        if not self._run_obj:
+            return None
+        try:
+            return self._run_obj.create_child(
+                name     = "retrieval/reranker",
+                run_type = "retriever",
+                inputs   = {
+                    "query":          query,
+                    "num_candidates": num_candidates,
+                    "top_k":          top_k,
+                    "model":          model or RERANKER_MODEL,
+                },
+            )
+        except Exception as exc:
+            log.debug(f"LangSmith start_rerank_span failed: {exc}")
+            return None
+
+    def end_rerank_span(
+        self,
+        child_span,
+        scores:         Optional[list[float]] = None,
+        latency_ms:     Optional[float] = None,
+        num_candidates: Optional[int] = None,
+        top_k:          Optional[int] = None,
+    ) -> None:
+        """Close the reranker child span and publish to LangSmith with latency."""
+        if not child_span:
+            return
+        try:
+            now = datetime.now(timezone.utc)
+            extra = {"model": RERANKER_MODEL}
+            if latency_ms is not None:
+                extra["latency_ms"] = round(latency_ms, 1)
+                extra["latency_seconds"] = round(latency_ms / 1000.0, 3)
+
+            outputs = {
+                "latency_ms":       round(latency_ms, 2) if latency_ms is not None else None,
+                "latency_seconds":  round(latency_ms / 1000.0, 3) if latency_ms is not None else None,
+                "top_score":        round(max(scores, default=0.0), 4) if scores else None,
+                "min_score":        round(min(scores, default=0.0), 4) if scores else None,
+                "avg_score":        round(sum(scores) / max(len(scores), 1), 4) if scores else None,
+                "scores":           [round(s, 4) for s in scores] if scores else [],
+            }
+            if num_candidates is not None:
+                outputs["num_candidates"] = num_candidates
+            if top_k is not None:
+                outputs["top_k"] = top_k
+
+            if hasattr(child_span, "extra") and isinstance(child_span.extra, dict):
+                child_span.extra.update(extra)
+            child_span.end(
+                end_time = now,
+                outputs  = outputs,
+            )
+            child_span.post()
+        except Exception as exc:
+            log.debug(f"LangSmith end_rerank_span failed: {exc}")
+
+    def log_reranker(
+        self,
+        query:          str,
+        num_candidates: int,
+        top_k:          int,
+        latency_ms:     float,
+        scores:         Optional[list[float]] = None,
+        model:          Optional[str] = None,
+    ) -> None:
+        """Log the cross-encoder reranking step as a completed child span in LangSmith."""
+        if not self._run_obj:
+            return
+        try:
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            start_ts = now - timedelta(milliseconds=latency_ms)
+            child = self._run_obj.create_child(
+                name       = "retrieval/reranker",
+                run_type   = "retriever",
+                inputs     = {
+                    "query":          query,
+                    "num_candidates": num_candidates,
+                    "top_k":          top_k,
+                    "model":          model or RERANKER_MODEL,
+                },
+                start_time = start_ts,
+            )
+            if hasattr(child, "extra") and isinstance(child.extra, dict):
+                child.extra.update({
+                    "latency_ms":       round(latency_ms, 1),
+                    "latency_seconds":  round(latency_ms / 1000.0, 3),
+                    "model":            model or RERANKER_MODEL,
+                })
+            child.end(
+                end_time = now,
+                outputs  = {
+                    "latency_ms":       round(latency_ms, 2),
+                    "latency_seconds":  round(latency_ms / 1000.0, 3),
+                    "num_candidates":   num_candidates,
+                    "top_k":            top_k,
+                    "top_score":        round(max(scores, default=0.0), 4) if scores else None,
+                    "min_score":        round(min(scores, default=0.0), 4) if scores else None,
+                    "avg_score":        round(sum(scores) / max(len(scores), 1), 4) if scores else None,
+                    "scores":           [round(s, 4) for s in scores] if scores else [],
+                },
+            )
+            child.post()
+        except Exception as exc:
+            log.debug(f"LangSmith log_reranker failed: {exc}")
 
     def log_web_gather(
         self,

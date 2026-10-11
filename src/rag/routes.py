@@ -221,11 +221,26 @@ async def websocket_chat(websocket: WebSocket):
                 tracer.finish(cleaned_answer)
             await websocket.send_json({"type": "done", "run_id": tracer.run_id if tracer else None})
 
-        except Exception as e:
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket client disconnected during streaming for user {user_id}")
+            if tracer:
+                tracer.finish_error(Exception("Client disconnected"))
+            break
+        except (RuntimeError, Exception) as e:
+            err_str = str(e).lower()
+            if "cannot call \"send\" once a close message has been sent" in err_str or "close message has been sent" in err_str:
+                logger.info(f"WebSocket closed during streaming for user {user_id}")
+                if tracer:
+                    tracer.finish_error(e)
+                break
+
             logger.error(f"Error during WS chat streaming for user {user_id}: {e}", exc_info=True)
             if tracer:
                 tracer.finish_error(e)
-            await websocket.send_json({"type": "error", "message": f"Error generating answer: {str(e)}"})
+            try:
+                await websocket.send_json({"type": "error", "message": f"Error generating answer: {str(e)}"})
+            except Exception:
+                pass
 
 
 

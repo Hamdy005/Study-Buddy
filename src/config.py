@@ -75,7 +75,11 @@ class Settings:
     # ── Observability (LangSmith) ──────────────────────────────────────────────
     # Obtain your API key at https://smith.langchain.com → Settings → API Keys
     langsmith_api_key: str  = os.getenv("LANGSMITH_API_KEY", "")
-    langsmith_project: str  = os.getenv("LANGSMITH_PROJECT", "study-buddy")
+    # ── Hugging Face ───────────────────────────────────────────────────────────
+    hf_token: str           = (
+        os.getenv("HF_TOKEN")
+        or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
+    )
 
 
 @lru_cache()
@@ -85,6 +89,9 @@ def get_settings() -> Settings:
         os.environ["GEMINI_API_KEY"] = s.gemini_api_key
     if s.mistral_api_key:
         os.environ["MISTRAL_API_KEY"] = s.mistral_api_key
+    if s.hf_token:
+        os.environ["HF_TOKEN"] = s.hf_token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = s.hf_token
     if "TRANSFORMERS_NO_TF" not in os.environ and s.transformers_no_tf:
         os.environ["TRANSFORMERS_NO_TF"] = s.transformers_no_tf
     return s

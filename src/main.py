@@ -41,6 +41,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database warmup failed: {e}")
 
+    # Explicitly assign all available physical/logical CPU cores to PyTorch for model inference
+    try:
+        import torch
+
+        cpu_cores = os.cpu_count() or 4
+        torch.set_num_threads(cpu_cores)          # Intra-op parallelism (splits matrix ops across all cores)
+        try:
+            torch.set_num_interop_threads(2)      # Inter-op parallelism (runs independent ops in parallel)
+        except RuntimeError:
+            pass
+        logger.info(f"PyTorch CPU threads configured: {cpu_cores} intra-op cores.")
+    except Exception as e:
+        logger.warning(f"Could not configure PyTorch CPU threads: {e}")
 
     try:
         from src.rag.rag import get_embedder, warmup_embedder

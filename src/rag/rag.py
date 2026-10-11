@@ -150,7 +150,7 @@ async def store_embeddings_async(material_id: str, chunk_ids: list[str], chunks:
         await asyncio.to_thread(store_embeddings, material_id, chunk_ids, chunks)
 
 
-def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
+def similarity_search(query: str, material_id: str, k: int = 5, tracer: Optional[ChatTracer] = None) -> list[dict]:
     """Retrieve top_k chunks using Ensemble Retrieval followed by Reranking.
 
     1. Ensemble Retrieval: invokes LangChain's EnsembleRetriever (Vector 60% + BM25 40%)
@@ -179,11 +179,36 @@ def similarity_search(query: str, material_id: str, k: int = 5) -> list[dict]:
         for doc in docs[:fetch_k]
     ]
 
-    # 2. Reranker call in rag.py: batch worker scores candidates across concurrent requests
-    return rerank_batch(query=query, records=candidates, top_k=k)
+    # 2. Reranker call with LangSmith tracing & latency measurement
+    rerank_span = tracer.start_rerank_span(query=query, num_candidates=len(candidates), top_k=k) if tracer else None
+    t0_rerank = time.perf_counter()
+    ranked = rerank_batch(query=query, records=candidates, top_k=k)
+    latency_ms = (time.perf_counter() - t0_rerank) * 1000
+
+    if tracer:
+        scores = [float(r.get("rerank_score", 0.0)) for r in ranked]
+        if rerank_span:
+            tracer.end_rerank_span(
+                rerank_span,
+                scores=scores,
+                latency_ms=latency_ms,
+                num_candidates=len(candidates),
+                top_k=k,
+            )
+        else:
+            tracer.log_reranker(
+                query=query,
+                num_candidates=len(candidates),
+                top_k=k,
+                latency_ms=latency_ms,
+                scores=scores,
+            )
+
+    logger.info(f"⏱️ Reranker took {latency_ms:.1f}ms ({latency_ms/1000:.2f}s) for {len(candidates)} candidates.")
+    return ranked
 
 
-async def similarity_search_async(query: str, material_id: str, k: int = 5) -> list[dict]:
+async def similarity_search_async(query: str, material_id: str, k: int = 5, tracer: Optional[ChatTracer] = None) -> list[dict]:
     """Retrieve top_k chunks asynchronously using Ensemble Retrieval and batch reranking."""
     if not query or not material_id:
         return []
@@ -206,14 +231,39 @@ async def similarity_search_async(query: str, material_id: str, k: int = 5) -> l
         for doc in docs[:fetch_k]
     ]
 
-    # 2. Async batch reranker call in rag.py
-    return await rerank_async(query=query, records=candidates, top_k=k)
+    # 2. Async batch reranker call with LangSmith tracing & latency measurement
+    rerank_span = tracer.start_rerank_span(query=query, num_candidates=len(candidates), top_k=k) if tracer else None
+    t0_rerank = time.perf_counter()
+    ranked = await rerank_async(query=query, records=candidates, top_k=k)
+    latency_ms = (time.perf_counter() - t0_rerank) * 1000
+
+    if tracer:
+        scores = [float(r.get("rerank_score", 0.0)) for r in ranked]
+        if rerank_span:
+            tracer.end_rerank_span(
+                rerank_span,
+                scores=scores,
+                latency_ms=latency_ms,
+                num_candidates=len(candidates),
+                top_k=k,
+            )
+        else:
+            tracer.log_reranker(
+                query=query,
+                num_candidates=len(candidates),
+                top_k=k,
+                latency_ms=latency_ms,
+                scores=scores,
+            )
+
+    logger.info(f"⏱️ Async reranker took {latency_ms:.1f}ms ({latency_ms/1000:.2f}s) for {len(candidates)} candidates.")
+    return ranked
 
 
 # ── LLM ────────────────────────────────────────────────
 
 def get_llm():
-    """RAG Chatbot LLM — strictly uses Mistral AI ministral-8b-latest."""
+    """RAG Chatbot primary LLM — Mistral AI ministral-8b-latest."""
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not mistral_key:
         raise ValueError("MISTRAL_API_KEY is not configured in config.env. Required for Ministral 8B RAG chatbot.")
@@ -224,6 +274,48 @@ def get_llm():
         temperature=0.3,
         max_tokens=3500,
         timeout=120,
+        max_retries=3,
+    )
+
+
+def get_rag_router_llm():
+    """RAG-chatbot agentic tool-routing LLM — Mistral AI ministral-8b-latest.
+
+    Uses Ministral 8B as the web-search router inside the RAG chatbot pipeline.
+    Ministral supports .bind_tools() natively so no Gemini is needed for this step.
+    Kept separate from get_llm() so temperature and token limits can be tuned independently.
+    """
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if not mistral_key:
+        raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
+    logger.info("Initializing RAG router LLM with Mistral AI model: ministral-8b-latest")
+    return ChatMistralAI(
+        model="ministral-8b-latest",
+        api_key=mistral_key,
+        temperature=0.1,   # Lower temperature for deterministic tool selection
+        max_tokens=512,    # Router only needs to emit tool_calls, not long text
+        timeout=30,
+        max_retries=3,
+    )
+
+
+def get_rag_fallback_llm():
+    """RAG Chatbot fallback LLM — Mistral AI ministral-3b-latest (or ministral-8b-latest).
+
+    Used when the primary call needs a fallback. Stays 100% within the Ministral
+    family — no Gemini model is involved in the chatbot path.
+    """
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if not mistral_key:
+        raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
+    logger.info("Initializing RAG Chatbot fallback LLM with Mistral AI model: ministral-3b-latest")
+    return ChatMistralAI(
+        model="ministral-3b-latest",
+        api_key=mistral_key,
+        temperature=0.3,
+        max_tokens=3500,
+        timeout=120,
+        max_retries=3,
     )
 
 
@@ -288,7 +380,8 @@ def get_quiz_fallback_llm():
 
 
 def get_fallback_llm():
-    """Fallback LLM using Gemini 3.1 Flash Lite."""
+    """Legacy alias kept for callers outside the RAG chatbot (summarizer, quiz).
+    Returns Gemini 3.1 Flash Lite — NOT used in the RAG chatbot path."""
     return get_summary_fallback_llm()
 
 
@@ -475,7 +568,7 @@ def _agentic_gather_web_content(
         "arxiv_search":     (direct_arxiv_search, "ArXiv Research"),
     }
 
-    # ── Router LLM call ──────────────────────────────────────────────────
+    # ── Router LLM call (Summarizer / Quiz path — uses Gemini) ──────────────────────────────────────────────────
     try:
         router_llm = get_summary_llm()
         llm_with_tools = router_llm.bind_tools(tools)
@@ -513,7 +606,7 @@ def _agentic_gather_web_content(
         router_response = llm_with_tools.invoke(messages)
         selected_calls = getattr(router_response, "tool_calls", []) or []
 
-        # Log Gemini router invocation (gemini-3.5-flash-lite)
+        # Log Gemini router invocation (gemini-3.5-flash-lite) — Summarizer/Quiz path only
         if tracer:
             usage = getattr(router_response, "usage_metadata", None) or {}
             tracer.log_llm_call(
@@ -603,14 +696,183 @@ def _agentic_gather_web_content(
     return combined, has_wiki, has_ddg, has_arxiv
 
 
-# ── Supabase Retriever  ────────────────
+def _agentic_gather_web_content_rag(
+    query: str,
+    is_topic: bool,
+    existing_doc_context: str = "",
+    subject_title: str = "",
+    tracer: Optional[ChatTracer] = None,
+) -> tuple[str, bool, bool, bool]:
+    """Agentic web-search router for the RAG chatbot.
+
+    Identical contract to _agentic_gather_web_content() but uses
+    ``mistral-small-latest`` (via get_rag_router_llm()) as the tool-calling
+    router so that **no Gemini model is involved in the chatbot pipeline**.
+
+    The Summarizer and Quiz callers still use the original function which routes
+    through Gemini Flash-Lite.
+    """
+    tools = _make_search_tools(is_topic)
+    tool_map = {
+        "wikipedia_search": (direct_wiki_search, "Wikipedia"),
+        "web_search":       (direct_ddg_search,  "Web Search"),
+        "arxiv_search":     (direct_arxiv_search, "ArXiv Research"),
+    }
+
+    # ── Check if router LLM call is even needed ────────────────────────────────
+    if not is_topic and existing_doc_context:
+        external_keywords = {
+            "latest", "recent", "current", "release", "releases", "version", "versions",
+            "today", "now", "news", "price", "prices", "2024", "2025", "2026",
+            "online", "web", "google", "search", "browse", "arxiv", "paper", "papers",
+            "scientific", "research paper", "state of the art", "sota", "update", "updates"
+        }
+        q_lower = query.lower()
+        has_external_intent = any(kw in q_lower for kw in external_keywords)
+        if not has_external_intent:
+            logger.info(
+                f"RAG: Document context present ({len(existing_doc_context)} chars) and no external "
+                f"keywords in query='{query}'. Bypassing router LLM to conserve Mistral rate limit."
+            )
+            return "", False, False, False
+
+    # ── Router LLM call (RAG chatbot path — uses Mistral) ──────────────────────
+    selected_calls: list = []
+    try:
+        router_llm = get_rag_router_llm()
+        llm_with_tools = router_llm.bind_tools(tools)
+
+        if is_topic:
+            messages = [
+                SystemMessage(content=(
+                    "You are an expert AI educational research router. "
+                    "Your job is to select search tools to gather comprehensive background information for a study topic. "
+                    "You MUST select and invoke search tools for any topic. "
+                    "Call web_search for up-to-date web content. "
+                    "Call wikipedia_search for foundational encyclopedic knowledge. "
+                    "Call arxiv_search ONLY if the topic involves scientific, academic, machine learning, physics, math, AI, or technical research."
+                )),
+                HumanMessage(content=f'Study topic to research: "{query}"'),
+            ]
+        else:
+            doc_preview = existing_doc_context[:600].strip() if existing_doc_context else ""
+            messages = [
+                SystemMessage(content=(
+                    "You are an AI research router. "
+                    "Decide whether external search tools are needed to supplement the document context. "
+                    "If the document context is sufficient to answer the query, do NOT call any tools. "
+                    "If the query asks for current info, recent software versions, releases, real-time facts, "
+                    "or topics missing from the document context, call web_search. "
+                    "If the query asks for academic paper research or cutting-edge scientific methods, call arxiv_search."
+                )),
+                HumanMessage(content=(
+                    f'User query: "{query}"\n'
+                    f'Subject: "{subject_title}"\n'
+                    f'Document context retrieved:\n{doc_preview}'
+                )),
+            ]
+
+        router_response = llm_with_tools.invoke(messages)
+        selected_calls = getattr(router_response, "tool_calls", []) or []
+
+        # Pause briefly to prevent back-to-back request collision on Mistral API (1 RPS limit)
+        time.sleep(0.8)
+
+        # Log Mistral router span in LangSmith
+        if tracer:
+            usage = getattr(router_response, "usage_metadata", None) or {}
+            tracer.log_llm_call(
+                model          = "ministral-8b-latest",
+                prompt_text    = f"User query: {query}\nSubject: {subject_title}",
+                model_settings = {"temperature": 0.1, "max_tokens": 512},
+                usage          = usage,
+                role           = "router",
+            )
+
+    except Exception as e:
+        logger.warning(f"RAG agentic router (Mistral) failed ({e}); falling back to default tool selection.")
+        selected_calls = []
+
+    # ── Same fallback guarantees as the original function ──────────────────────
+
+    if is_topic and not selected_calls:
+        logger.info(f"RAG Mistral router emitted no calls for topic '{query}'; activating intelligent fallback.")
+        academic_keywords = {"llm", "lora", "quantum", "model", "neural", "transformer", "algorithm", "deep learning", "ai", "physics", "math", "genomics", "arxiv"}
+        q_lower = query.lower()
+        is_academic = any(kw in q_lower for kw in academic_keywords)
+
+        selected_calls = [
+            {"name": "wikipedia_search", "args": {"query": query}},
+            {"name": "web_search",       "args": {"query": f"{query} {subject_title}".strip()}},
+        ]
+        if is_academic:
+            selected_calls.append({"name": "arxiv_search", "args": {"query": query}})
+
+    if not is_topic and not selected_calls:
+        external_keywords = {"latest", "current", "recent", "release", "version", "today", "news", "price", "2025", "2026"}
+        q_lower = query.lower()
+        if any(kw in q_lower for kw in external_keywords):
+            logger.info(f"External/temporal query detected (RAG path) for '{query}'; activating web_search fallback.")
+            selected_calls = [{"name": "web_search", "args": {"query": query}}]
+
+    if not selected_calls:
+        logger.info(f"RAG agentic router: no tools selected for query='{query}' is_topic={is_topic}")
+        return "", False, False, False
+
+    # ── Parallel tool execution (same as original) ─────────────────────────────
+    context_parts: list[str] = []
+    has_wiki = has_ddg = has_arxiv = False
+
+    wiki_max  = WIKI_DOC_CONTENT_CHARS_SUMMARY  if is_topic else WIKI_DOC_CONTENT_CHARS_MAX
+    ddg_max   = DUCKDUCKGO_DOC_CONTENT_CHARS_SUMMARY if is_topic else DUCKDUCKGO_DOC_CONTENT_CHARS_MAX
+    arxiv_max = ARXIV_DOC_CONTENT_CHARS_SUMMARY  if is_topic else ARXIV_DOC_CONTENT_CHARS_MAX
+
+    def _run_tool(tool_call: dict) -> tuple[str, str, str]:
+        name = tool_call.get("name", "")
+        args = tool_call.get("args", {})
+        raw_query = args.get("query", query)
+        if name == "web_search" and subject_title:
+            if len(raw_query.split()) < 4 and subject_title.lower() not in raw_query.lower():
+                raw_query = f"{raw_query} {subject_title}".strip()
+
+        if name == "wikipedia_search":
+            return name, "Wikipedia", direct_wiki_search(raw_query, max_chars=wiki_max)
+        elif name == "web_search":
+            return name, "Web Search", direct_ddg_search(raw_query, max_chars=ddg_max)
+        elif name == "arxiv_search":
+            return name, "ArXiv Research", direct_arxiv_search(raw_query, max_chars=arxiv_max)
+        return name, "", ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(selected_calls)) as executor:
+        futures = [executor.submit(_run_tool, tc) for tc in selected_calls]
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                name, label, result = fut.result(timeout=20)
+                if result.strip():
+                    context_parts.append(f"--- {label} ---\n{result}")
+                    if name == "wikipedia_search": has_wiki = True
+                    elif name == "web_search":     has_ddg  = True
+                    elif name == "arxiv_search":   has_arxiv = True
+            except Exception as e:
+                logger.warning(f"RAG tool execution error: {e}")
+
+    combined = "\n\n".join(context_parts)
+    logger.info(
+        f"RAG agentic web gather done — wiki={has_wiki} ddg={has_ddg} arxiv={has_arxiv} "
+        f"chars={len(combined)} for query='{query}'"
+    )
+    return combined, has_wiki, has_ddg, has_arxiv
+
+
+
 
 class SupabaseRetriever(BaseRetriever):
     material_id: str
     k: int = TOP_K_CHUNKS
+    tracer: Optional[ChatTracer] = None
 
     def _get_relevant_documents(self, query: str) -> list[Document]:
-        results = similarity_search(query, self.material_id, self.k)
+        results = similarity_search(query, self.material_id, self.k, tracer=self.tracer)
         return [
             Document(page_content=r["content"], metadata={
                 "similarity": r.get("similarity"),
@@ -703,7 +965,7 @@ def rag_answer(
 
     if not is_topic:
         # --- Material-based query (PDF/URL): hybrid ensemble search (60% vector + 40% BM25) ---
-        results = similarity_search(query, material_id, k=TOP_K_CHUNKS)
+        results = similarity_search(query, material_id, k=TOP_K_CHUNKS, tracer=tracer)
         if results:
             has_chunks = True
             retrieval_chunks = [r["content"] for r in results]
@@ -739,8 +1001,8 @@ def rag_answer(
     # Build existing doc context string for the router (PDF/URL only)
     existing_doc_context = "\n\n".join(context_parts) if (not is_topic and context_parts) else ""
 
-    # --- Agentic web context gathering ---
-    web_content, has_wiki, has_ddg, has_arxiv = _agentic_gather_web_content(
+    # --- Agentic web context gathering (RAG chatbot — Mistral router, no Gemini) ---
+    web_content, has_wiki, has_ddg, has_arxiv = _agentic_gather_web_content_rag(
         query=query,
         is_topic=is_topic,
         existing_doc_context=existing_doc_context,
@@ -821,11 +1083,15 @@ def rag_answer(
             memory.save_context({"input": query}, {"output": answer})
         return answer, memory
     except Exception as e:
-        logger.warning(f"Primary LLM call failed or rate-limited: {e}. Falling back to secondary LLM.")
+        is_rate_limit = "429" in str(e) or "rate limit" in str(e).lower()
+        logger.warning(f"Primary LLM call failed or rate-limited (rate_limit={is_rate_limit}): {e}. Falling back to secondary LLM.")
         if tracer:
             tracer.log_error("primary_llm", e)
+        if is_rate_limit:
+            logger.info("Mistral rate limit hit in rag_answer; waiting 2.0s before fallback attempt...")
+            time.sleep(2.0)
         try:
-            fallback_llm = get_fallback_llm()
+            fallback_llm = get_rag_fallback_llm()
             chain = prompt | fallback_llm
             memory_vars = memory.load_memory_variables({"input": query})
             chat_history = memory_vars.get("chat_history", [])
@@ -851,16 +1117,14 @@ def rag_answer(
                         "total_tokens": input_est + output_est,
                     }
                 tracer.log_llm_call(
-                    model           = "gemini-3.1-flash-lite",
+                    model           = "ministral-3b-latest",
                     prompt_text     = context_str,
-                    model_settings  = {"temperature": 0.3, "max_output_tokens": 4000},
+                    model_settings  = {"temperature": 0.3, "max_tokens": 3500},
                     usage           = usage,
                     ttft_ms         = None,
                     is_fallback     = True,
                     role            = "fallback",
                 )
-            else:
-                record_gemini_request("gemini-3.1-flash-lite")
 
             # Only persist non-refusal answers to memory
             if not _is_refusal(answer):
@@ -882,7 +1146,9 @@ async def rag_answer_stream(
     tracer: Optional[ChatTracer] = None,
 ):
     """
-    Async generator that streams LLM response tokens using Mistral AI (with Gemini fallback).
+    Async generator that streams LLM response tokens using Mistral AI only.
+    Primary model: ministral-8b-latest. Fallback: mistral-small-latest.
+    Gemini is NOT used anywhere in this function.
     Yields individual token strings as they arrive.
     Updates conversation memory upon completion if not a refusal.
     """
@@ -910,7 +1176,7 @@ async def rag_answer_stream(
 
     if not is_topic:
         # --- Material-based query (PDF/URL): hybrid ensemble search (60% vector + 40% BM25) ---
-        results = await similarity_search_async(query, material_id, k=TOP_K_CHUNKS)
+        results = await similarity_search_async(query, material_id, k=TOP_K_CHUNKS, tracer=tracer)
         if results:
             has_chunks = True
             retrieval_chunks = [r["content"] for r in results]
@@ -946,9 +1212,9 @@ async def rag_answer_stream(
     # Build existing doc context string for the router (PDF/URL only)
     existing_doc_context = "\n\n".join(context_parts) if (not is_topic and context_parts) else ""
 
-    # --- Agentic web context gathering (runs in thread to avoid blocking event loop) ---
+    # --- Agentic web context gathering (RAG chatbot — Mistral router, no Gemini) ---
     web_content, has_wiki, has_ddg, has_arxiv = await asyncio.to_thread(
-        _agentic_gather_web_content,
+        _agentic_gather_web_content_rag,
         query,
         is_topic,
         existing_doc_context,
@@ -1025,15 +1291,19 @@ async def rag_answer_stream(
                 yield token
 
     except Exception as e:
-        logger.warning(f"Primary LLM streaming failed or rate-limited: {e}. Falling back to secondary LLM.")
+        is_rate_limit = "429" in str(e) or "rate limit" in str(e).lower()
+        logger.warning(f"Primary LLM streaming failed or rate-limited (rate_limit={is_rate_limit}): {e}. Falling back to secondary LLM.")
         if tracer:
             tracer.log_error("primary_llm_stream", e)
         used_fallback = True
         first_token_ts = None
         ttft_ms = None
         stream_start = time.perf_counter()
+        if is_rate_limit:
+            logger.info("Mistral rate limit hit on primary LLM; waiting 2.0s before fallback attempt...")
+            await asyncio.sleep(2.0)
         try:
-            fallback_llm = get_fallback_llm()
+            fallback_llm = get_rag_fallback_llm()
             chain = prompt | fallback_llm
 
             async for chunk in chain.astream({
@@ -1062,9 +1332,9 @@ async def rag_answer_stream(
 
     # Log LLM span with token usage, TTFT, and dynamic pricing
     if tracer:
-        model_name = "gemini-3.1-flash-lite" if used_fallback else "ministral-8b-latest"
+        model_name = "ministral-3b-latest" if used_fallback else "ministral-8b-latest"
         settings_map = (
-            {"temperature": 0.3, "max_output_tokens": 4000}
+            {"temperature": 0.3, "max_tokens": 3500}
             if used_fallback
             else {"temperature": 0.3, "max_tokens": 3500}
         )
@@ -1089,8 +1359,6 @@ async def rag_answer_stream(
         )
         # Wire eval stubs — will be activated when Corrective RAG is integrated
         tracer.schedule_evals(query=query, answer=full_answer, context=context_str)
-    elif used_fallback:
-        record_gemini_request("gemini-3.1-flash-lite")
 
     if not _is_refusal(full_answer):
         memory.save_context({"input": query}, {"output": full_answer})
@@ -1115,13 +1383,13 @@ def extract_chat_title(query: str, material_title: Optional[str] = None) -> str:
     except Exception as e:
         logger.warning(f"Primary LLM call failed in extract_chat_title: {e}. Falling back to secondary LLM.")
         try:
-            fallback_llm = get_fallback_llm()
+            fallback_llm = get_rag_fallback_llm()
             chain = prompt | fallback_llm
             response = chain.invoke({"query": query})
-            record_gemini_request("gemini-3.1-flash-lite")
         except Exception as fallback_err:
             logger.error(f"Fallback LLM call also failed in extract_chat_title: {fallback_err}")
-            raise fallback_err
+            clean_q = query.replace('\n', ' ').strip()
+            return (clean_q[:40] + '...') if len(clean_q) > 40 else clean_q
 
     raw_title = _clean_llm_response(response.content)
     # Strip markdown symbols (*, #, _, `, quotes)

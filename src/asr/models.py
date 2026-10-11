@@ -26,8 +26,14 @@ os.environ.setdefault("USE_TORCH", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 
 import torch
-torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
-torch.set_num_interop_threads(1)
+try:
+    torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
+except RuntimeError:
+    pass
+try:
+    torch.set_num_interop_threads(1)
+except RuntimeError:
+    pass
 
 _audio_model_en = None
 _audio_model_ar = None

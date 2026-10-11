@@ -1272,32 +1272,40 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         { id: (Date.now() + 1).toString(), role: 'assistant', content: '', timestamp: new Date().toISOString() },
       ])
 
+      const handleStreamComplete = () => {
+        if (isMounted.current) {
+          setIsStreaming(false)
+          setIsLoading(false)
+
+          if (sessions.find((s) => s.id === sessionId)?.title === 'Untitled Chat') {
+            tutorAPI
+              .extractTitle(sessionId!, currentInput)
+              .then((titleData) => {
+                if (isMounted.current) {
+                  setSessions((prev) =>
+                    prev.map((s) => (s.id === sessionId ? { ...s, title: titleData.title } : s))
+                  )
+                }
+              })
+              .catch(() => {})
+          }
+        }
+      }
+
       ws.onmessage = (event) => {
         const chunk = event.data
 
         if (chunk === '[DONE]') {
-          if (isMounted.current) {
-            setIsStreaming(false)
-            setIsLoading(false)
-
-            if (sessions.find((s) => s.id === sessionId)?.title === 'Untitled Chat') {
-              tutorAPI
-                .extractTitle(sessionId!, currentInput)
-                .then((titleData) => {
-                  if (isMounted.current) {
-                    setSessions((prev) =>
-                      prev.map((s) => (s.id === sessionId ? { ...s, title: titleData.title } : s))
-                    )
-                  }
-                })
-                .catch(() => {})
-            }
-          }
+          handleStreamComplete()
           return
         }
 
         try {
           const parsed = JSON.parse(chunk)
+          if (parsed.type === 'done') {
+            handleStreamComplete()
+            return
+          }
           if (parsed.type === 'error') {
             if (isMounted.current) {
               toast.error(parsed.message || 'Error generating response')
