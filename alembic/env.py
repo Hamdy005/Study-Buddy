@@ -7,8 +7,13 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-# Ensure src is on Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure both src and project root / app root are on sys.path
+_here = os.path.dirname(os.path.abspath(__file__))
+_parent = os.path.abspath(os.path.join(_here, ".."))
+_grandparent = os.path.abspath(os.path.join(_parent, ".."))
+for _p in (_grandparent, _parent):
+    if _p and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from src.config import settings
 from src.db_models import Base
@@ -93,6 +98,9 @@ def include_object(object, name, type_, reflected, compare_to):
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
+    if not db_url:
+        return
+
     configuration = config.get_section(config.config_ini_section, {})
     if db_url:
         configuration["sqlalchemy.url"] = db_url

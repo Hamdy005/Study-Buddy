@@ -28,10 +28,33 @@ from src.config import settings
 async def lifespan(app: FastAPI):
     # Run pending Alembic database migrations automatically on server startup
     try:
-        import subprocess
-        logger.info("Running database migrations via Alembic...")
-        subprocess.run(["alembic", "upgrade", "head"], check=True)
-        logger.info("Database migrations completed successfully.")
+        db_url = settings.database_url or os.getenv("DATABASE_URL", "")
+        if not db_url:
+            logger.info("DATABASE_URL not configured; skipping automatic Alembic migrations.")
+        else:
+            from alembic.config import Config
+            from alembic import command
+
+            candidate_ini = None
+            for p in [
+                os.path.join(current_dir, "alembic.ini"),
+                os.path.join(parent_dir, "alembic.ini"),
+                os.path.abspath("alembic.ini"),
+            ]:
+                if os.path.isfile(p):
+                    candidate_ini = p
+                    break
+
+            if candidate_ini:
+                logger.info(f"Running database migrations via Alembic ({candidate_ini})...")
+                alembic_cfg = Config(candidate_ini)
+                script_dir = os.path.join(os.path.dirname(candidate_ini), "alembic")
+                if os.path.isdir(script_dir):
+                    alembic_cfg.set_main_option("script_location", script_dir)
+                command.upgrade(alembic_cfg, "head")
+                logger.info("Database migrations completed successfully.")
+            else:
+                logger.warning("alembic.ini not found; skipping database migrations.")
     except Exception as e:
         logger.warning(f"Database migration step failed or skipped: {e}")
 

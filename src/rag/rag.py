@@ -56,6 +56,10 @@ from .schemas import EmbeddingJob
 
 @lru_cache
 def get_embedder():
+    try:
+        import sentence_transformers
+    except Exception as exc:
+        logger.error(f"Failed to import sentence_transformers directly: {exc}", exc_info=True)
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         model_kwargs={"device": "cpu"},

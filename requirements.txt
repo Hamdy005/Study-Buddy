@@ -1,6 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
+torchaudio
 
 arxiv==2.2.0
 wikipedia==1.4.0
@@ -16,10 +17,16 @@ mistralai
 langchain-openai
 langchain-huggingface
 langchain-text-splitters
+langsmith
 python-dotenv
-sentence-transformers
-rank-bm25
-numpy
+
+# ── Retrieval & Search ────────────────────────────────────
+sentence-transformers>=3.0.0
+rank-bm25>=0.2.2
+
+# ── Binary Compatibility (NumPy & PyArrow) ────────────────
+numpy>=1.26.4,<2.0.0
+pyarrow>=14.0.0,<18.0.0
 
 pdfplumber==0.11.4
 unstructured==0.18.15
@@ -34,12 +41,13 @@ PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4
 
 supabase
+redis>=5.0.0
 transformers
 einops
 sacremoses
 sentencepiece
 omegaconf
-onnxruntime
+onnxruntime>=1.17.0
 
 # ── ASR Models ──────────────────────────────────────────
 nemo_toolkit[asr]
@@ -54,6 +62,3 @@ pgvector>=0.2.5
 
 # ── Logging ─────────────────────────────────────────────
 loguru
-
-# ── Observability ────────────────────────────────────────
-langsmith
