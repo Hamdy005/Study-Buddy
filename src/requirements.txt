@@ -5,52 +5,61 @@ torchaudio
 
 arxiv==2.2.0
 wikipedia==1.4.0
-duckduckgo-search==8.1.1
+ddgs>=9.16.0
 validators==0.35.0
-streamlit==1.45.0
+streamlit>=1.45.0
 
-langchain==0.3.25
-langchain-community==0.3.4
-langchain-google-genai
-langchain-mistralai
-mistralai
-langchain-openai
-langchain-huggingface
-langchain-text-splitters
-langsmith
+# ── LangChain Ecosystem ──
+langchain>=0.3.27,<0.4.0
+langchain-core>=0.3.85,<1.0.0
+langgraph>=0.2.45,<0.3.0
+langgraph-checkpoint>=2.0.0,<3.0.0
+langgraph-sdk<0.2.0
+langchain-community>=0.3.27,<0.4.0
+langchain-google-genai>=2.1.0,<3.0.0
+langchain-mistralai==0.2.12
+mistralai>=2.0.0,<3.0.0
+langchain-openai>=0.3.29,<0.4.0
+langchain-huggingface>=0.2.0,<0.4.0
+langchain-text-splitters>=0.3.8,<1.0.0
+langsmith>=0.3.45,<1.0.0
 python-dotenv
 
 # ── Retrieval & Search ────────────────────────────────────
-sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0,<4.0.0
 rank-bm25>=0.2.2
 
 # ── Binary Compatibility (NumPy & PyArrow) ────────────────
 numpy>=1.26.4,<2.0.0
 pyarrow>=14.0.0,<18.0.0
 
-pdfplumber==0.11.4
+pdfplumber>=0.11.4
 unstructured==0.18.15
 
 fastapi
 uvicorn
 python-multipart
-pydantic
-httpx
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+# mistralai 3.x changed its HTTP client to httpx2; stay on 2.x-compatible httpx
+httpx>=0.25.2,<1.0.0
 cloudinary
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4
+bcrypt<=4.0.1
 
 supabase
 redis>=5.0.0
-transformers
+tokenizers>=0.20.0,<1.0.0
+transformers>=4.48.0,<=4.48.3
 einops
 sacremoses
-sentencepiece
-omegaconf
+sentencepiece<1.0.0
+omegaconf<=2.3
 onnxruntime>=1.17.0
 
 # ── ASR Models ──────────────────────────────────────────
-nemo_toolkit[asr]
+nemo_toolkit[asr]==2.2.1
 soundfile
 librosa
 

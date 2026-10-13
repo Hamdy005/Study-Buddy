@@ -1,4 +1,4 @@
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 MIN_MCQ_COUNT = 1
 MAX_MCQ_COUNT = 40

@@ -1,4 +1,5 @@
 .venv
+.site_packages
 **/__pycache__
 config.env
 logs/

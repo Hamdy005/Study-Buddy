@@ -1,0 +1,2 @@
+# Configuration for uv package manager
+index-strategy = "unsafe-best-match"

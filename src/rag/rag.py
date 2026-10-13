@@ -7,14 +7,19 @@ from loguru import logger
 from functools import lru_cache
 from typing import Optional
 from pydantic import BaseModel, Field
-from duckduckgo_search import DDGS
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 from langchain_community.utilities import WikipediaAPIWrapper, ArxivAPIWrapper
 from langchain_core.tools import StructuredTool
 from src.rag.tracing import ChatTracer, record_gemini_request
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
@@ -56,6 +61,8 @@ from .schemas import EmbeddingJob
 
 @lru_cache
 def get_embedder():
+    os.environ.setdefault("USE_TF", "0")
+    os.environ.setdefault("USE_TORCH", "1")
     try:
         import sentence_transformers
     except Exception as exc:
@@ -266,13 +273,31 @@ async def similarity_search_async(query: str, material_id: str, k: int = 5, trac
     return ranked
 
 
-# ── LLM ────────────────────────────────────────────────
+def _configure_mistral_ssl() -> None:
+    """Ensure Mistral SSL context loads system and local proxy CA certificates if available."""
+    try:
+        import langchain_mistralai.chat_models as _mistral_module
+        if hasattr(_mistral_module, "global_ssl_context"):
+            for cert_path in [
+                os.environ.get("SSL_CERT_FILE"),
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+            ]:
+                if cert_path and os.path.exists(cert_path):
+                    try:
+                        _mistral_module.global_ssl_context.load_verify_locations(cert_path)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
 
 def get_llm():
-    """RAG Chatbot primary LLM — Mistral AI ministral-8b-latest."""
+    """RAG Chatbot LLM — strictly uses Mistral AI ministral-8b-latest."""
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not mistral_key:
         raise ValueError("MISTRAL_API_KEY is not configured in config.env. Required for Ministral 8B RAG chatbot.")
+    _configure_mistral_ssl()
     logger.info("Initializing RAG Chatbot LLM with Mistral AI model: ministral-8b-latest")
     return ChatMistralAI(
         model="ministral-8b-latest",
@@ -280,7 +305,6 @@ def get_llm():
         temperature=0.3,
         max_tokens=3500,
         timeout=120,
-        max_retries=3,
     )
 
 
@@ -294,6 +318,7 @@ def get_rag_router_llm():
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not mistral_key:
         raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
+    _configure_mistral_ssl()
     logger.info("Initializing RAG router LLM with Mistral AI model: ministral-8b-latest")
     return ChatMistralAI(
         model="ministral-8b-latest",
@@ -314,6 +339,7 @@ def get_rag_fallback_llm():
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not mistral_key:
         raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
+    _configure_mistral_ssl()
     logger.info("Initializing RAG Chatbot fallback LLM with Mistral AI model: ministral-3b-latest")
     return ChatMistralAI(
         model="ministral-3b-latest",
@@ -412,39 +438,34 @@ def _clean_llm_response(content) -> str:
 
 def direct_ddg_search(query: str, max_chars: int = DUCKDUCKGO_DOC_CONTENT_CHARS_MAX) -> str:
     """
-    Run a DuckDuckGo web search for *query*, trying multiple backends in order.
-    Falls back from html → lite → api until a backend returns results.
-    Returns an empty string if all backends fail.
+    Run a web search for *query* using DDGS default engine.
+    Returns an empty string if the search fails or returns no results.
     """
-    for backend in ("html", "lite", "api"):
-        try:
-            ddgs = DDGS()
-            results = list(ddgs.text(query, max_results=DUCKDUCKGO_NUM_RESULTS, backend=backend))
-            if not results:
-                logger.warning(f"direct_ddg_search backend='{backend}': 0 results for '{query[:60]}'")
-                continue
-            snippets = [
-                f"{r.get('title', '')}: {r.get('body', '')}"
-                for r in results
-                if r.get('body')
-            ]
-            combined = "\n".join(snippets)
-            if not combined.strip():
-                continue
-            logger.info(f"direct_ddg_search: {len(results)} results via backend='{backend}' chars={len(combined)}")
-            return combined[:max_chars]
-        except Exception as e:
-            logger.warning(f"direct_ddg_search backend='{backend}' failed: {type(e).__name__}: {e}")
-            continue
-    logger.warning(f"direct_ddg_search: all backends failed for '{query[:60]}'")
-    return ""
+    try:
+        ddgs = DDGS()
+        results = list(ddgs.text(query, max_results=DUCKDUCKGO_NUM_RESULTS))
+        if not results:
+            logger.warning(f"direct_ddg_search: 0 results for '{query[:60]}'")
+            return ""
+        snippets = [
+            f"{r.get('title', '')}: {r.get('body', '')}"
+            for r in results
+            if r.get('body')
+        ]
+        combined = "\n".join(snippets)
+        if not combined.strip():
+            return ""
+        logger.info(f"direct_ddg_search: {len(results)} results chars={len(combined)}")
+        return combined[:max_chars]
+    except Exception as e:
+        logger.warning(f"direct_ddg_search failed: {type(e).__name__}: {e}")
+        return ""
 
 
 def direct_wiki_search(query: str, max_chars: int = WIKI_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run a targeted Wikipedia search for *query*.
-    Used ONLY for topic-type materials (no PDF/URL).
-    Returns an empty string if the search fails.
+    Falls back to DDG search if direct Wikipedia API fails.
     """
     try:
         wiki_api = WikipediaAPIWrapper(
@@ -452,17 +473,22 @@ def direct_wiki_search(query: str, max_chars: int = WIKI_DOC_CONTENT_CHARS_MAX) 
             doc_content_chars_max=max_chars,
         )
         result = wiki_api.run(query)
-        return result[:max_chars]
+        if result and result.strip():
+            return result[:max_chars]
     except Exception as e:
-        logger.warning(f"direct_wiki_search failed: {e}")
+        logger.debug(f"direct_wiki_search failed ({e}); falling back to web search")
+
+    # Fallback via DDG
+    try:
+        return direct_ddg_search(f"{query} wikipedia", max_chars=max_chars)
+    except Exception:
         return ""
 
 
 def direct_arxiv_search(query: str, max_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run an ArXiv paper search for *query*.
-    Invoked only when the agentic router classifies the topic as scientific/technical.
-    Returns an empty string if the search fails.
+    Falls back to DDG search if export.arxiv.org fails.
     """
     try:
         arxiv_api = ArxivAPIWrapper(
@@ -470,9 +496,15 @@ def direct_arxiv_search(query: str, max_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX
             doc_content_chars_max=max_chars,
         )
         result = arxiv_api.run(query)
-        return result[:max_chars]
+        if result and result.strip():
+            return result[:max_chars]
     except Exception as e:
-        logger.warning(f"direct_arxiv_search failed: {e}")
+        logger.debug(f"direct_arxiv_search failed ({e}); falling back to web search")
+
+    # Fallback via DDG
+    try:
+        return direct_ddg_search(f"{query} arxiv paper", max_chars=max_chars)
+    except Exception:
         return ""
 
 
@@ -536,11 +568,7 @@ def _make_search_tools(is_topic: bool) -> list:
         ),
     )
 
-    if is_topic:
-        return [wiki_tool, ddg_tool, arxiv_tool]
-    else:
-        # PDF/URL: document covers domain knowledge; only supplement with web/arxiv if needed
-        return [ddg_tool, arxiv_tool]
+    return [wiki_tool, ddg_tool, arxiv_tool]
 
 
 def _agentic_gather_web_content(
@@ -582,12 +610,16 @@ def _agentic_gather_web_content(
         if is_topic:
             messages = [
                 SystemMessage(content=(
-                    "You are an expert AI educational research router. "
-                    "Your job is to select search tools to gather comprehensive background information for a study topic. "
-                    "You MUST select and invoke search tools for any topic. "
-                    "Call web_search for up-to-date web content. "
-                    "Call wikipedia_search for foundational encyclopedic knowledge. "
-                    "Call arxiv_search ONLY if the topic involves scientific, academic, machine learning, physics, math, AI, or technical research."
+                    "You are an expert AI educational research router.\n"
+                    "Select search tools to gather background information for a study topic.\n\n"
+                    "Tool Selection Policy:\n"
+                    "1. Single Tool Priority: If the query fits cleanly into one category, stick to that ONE tool:\n"
+                    "   - Straight academic, AI/ML, math, physics, or research theory -> Call ONLY arxiv_search.\n"
+                    "   - Straight foundational, historical, encyclopedic concepts, or definitions -> Call ONLY wikipedia_search.\n"
+                    "   - Straight real-time, current updates, recent releases, or practical web guides -> Call ONLY web_search.\n\n"
+                    "2. Overlapping Multi-Tool Rule: If the query spans multiple categories or overlaps between domains "
+                    "(e.g., academic theory combined with current industry applications, or foundational theory overlapping with recent AI advances), "
+                    "you CAN and SHOULD select multiple tools at once (e.g. arxiv_search + web_search)."
                 )),
                 HumanMessage(content=f'Study topic to research: "{query}"'),
             ]
@@ -751,12 +783,16 @@ def _agentic_gather_web_content_rag(
         if is_topic:
             messages = [
                 SystemMessage(content=(
-                    "You are an expert AI educational research router. "
-                    "Your job is to select search tools to gather comprehensive background information for a study topic. "
-                    "You MUST select and invoke search tools for any topic. "
-                    "Call web_search for up-to-date web content. "
-                    "Call wikipedia_search for foundational encyclopedic knowledge. "
-                    "Call arxiv_search ONLY if the topic involves scientific, academic, machine learning, physics, math, AI, or technical research."
+                    "You are an expert AI educational research router.\n"
+                    "Select search tools to gather background information for a study topic.\n\n"
+                    "Tool Selection Policy:\n"
+                    "1. Single Tool Priority: If the query fits cleanly into one category, stick to that ONE tool:\n"
+                    "   - Straight academic, AI/ML, math, physics, or research theory -> Call ONLY arxiv_search.\n"
+                    "   - Straight foundational, historical, encyclopedic concepts, or definitions -> Call ONLY wikipedia_search.\n"
+                    "   - Straight real-time, current updates, recent releases, or practical web guides -> Call ONLY web_search.\n\n"
+                    "2. Overlapping Multi-Tool Rule: If the query spans multiple categories or overlaps between domains "
+                    "(e.g., academic theory combined with current industry applications, or foundational theory overlapping with recent AI advances), "
+                    "you CAN and SHOULD select multiple tools at once (e.g. arxiv_search + web_search)."
                 )),
                 HumanMessage(content=f'Study topic to research: "{query}"'),
             ]

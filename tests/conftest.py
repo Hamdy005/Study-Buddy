@@ -18,7 +18,6 @@ os.environ["JWT_ALGORITHM"]   = os.getenv("JWT_ALGORITHM",   "HS256")
 os.environ["ENVIRONMENT"]     = os.getenv("ENVIRONMENT",     "development")
 
 from src.dependencies import DEV_USER_ID, get_current_user_id
-from src.main import app
 from src.auth.rate_limiter import _store, _cooldowns
 from src.auth.jwt_utils import create_access_token, create_refresh_token, hash_token
 
@@ -86,6 +85,8 @@ async def client(mocked_supabase) -> AsyncGenerator[AsyncClient, None]:
     """
     async def override_get_current_user_id() -> str:
         return DEV_USER_ID
+
+    from src.main import app
 
     app.dependency_overrides[get_current_user_id] = override_get_current_user_id
 

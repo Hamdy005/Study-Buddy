@@ -5,52 +5,71 @@ torchaudio
 
 arxiv==2.2.0
 wikipedia==1.4.0
-duckduckgo-search==8.1.1
+ddgs>=9.16.0
 validators==0.35.0
-streamlit==1.45.0
+streamlit>=1.45.0
 
-langchain==0.3.25
-langchain-community==0.3.4
-langchain-google-genai
-langchain-mistralai
-mistralai
-langchain-openai
-langchain-huggingface
-langchain-text-splitters
-langsmith
+# ── LangChain Ecosystem (0.3.x — anchored on langchain-core 0.3.85–0.3.x) ──
+# langchain 0.3.30 (latest 0.3.x) requires langchain-core>=0.3.85,<1.0.0.
+# All partner packages (community, google-genai, mistralai, openai, huggingface,
+# text-splitters) must satisfy <1.0.0 upper-bound.  langchain-community 0.3.31
+# requires langchain>=0.3.27, so the floor here is 0.3.27.
+langchain>=0.3.27,<0.4.0
+langchain-core>=0.3.85,<1.0.0
+langgraph>=0.2.45,<0.3.0
+langgraph-checkpoint>=2.0.0,<3.0.0
+langgraph-sdk<0.2.0
+langchain-community>=0.3.27,<0.4.0
+langchain-google-genai>=2.1.0,<3.0.0
+langchain-mistralai==0.2.12
+mistralai>=2.0.0,<3.0.0
+langchain-openai>=0.3.29,<0.4.0
+langchain-huggingface>=0.2.0,<0.4.0
+langchain-text-splitters>=0.3.8,<1.0.0
+langsmith>=0.3.45,<1.0.0
 python-dotenv
 
 # ── Retrieval & Search ────────────────────────────────────
-sentence-transformers>=3.0.0
+# sentence-transformers 5.x requires transformers>=5.0.0 which breaks the
+# transformers<5 constraint below — cap at <4.0.0 to stay on the 3.x series.
+sentence-transformers>=3.0.0,<4.0.0
 rank-bm25>=0.2.2
 
 # ── Binary Compatibility (NumPy & PyArrow) ────────────────
 numpy>=1.26.4,<2.0.0
 pyarrow>=14.0.0,<18.0.0
 
-pdfplumber==0.11.4
+pdfplumber>=0.11.4
 unstructured==0.18.15
 
 fastapi
 uvicorn
 python-multipart
-pydantic
-httpx
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+httpx>=0.25.2,<1.0.0
 cloudinary
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4
+bcrypt<=4.0.1
 
 supabase
 redis>=5.0.0
-transformers
+# Explicit tokenizers pin prevents binary/Python-wrapper version mismatch crash.
+# langchain-mistralai 0.2.x requires tokenizers<1,>=0.15.1.
+tokenizers>=0.20.0,<1.0.0
+# nemo_toolkit 2.2.1 [asr] requires transformers>=4.48.0,<=4.48.3 as an extra.
+# We satisfy that while keeping headroom for langchain-huggingface (>=4.39.0).
+transformers>=4.48.0,<=4.48.3
+tf-keras
 einops
 sacremoses
-sentencepiece
-omegaconf
+sentencepiece<1.0.0
+omegaconf<=2.3
 onnxruntime>=1.17.0
 
 # ── ASR Models ──────────────────────────────────────────
-nemo_toolkit[asr]
+nemo_toolkit[asr]==2.2.1
 soundfile
 librosa
 

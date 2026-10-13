@@ -1,4 +1,4 @@
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 MAX_INPUT_CHARS = 150000         
 MAX_COMBINED_TEXT_LEN = 160000

@@ -104,24 +104,32 @@ class ONNXReranker:
         return self
 
     def compute_score(
-        self, pairs: list[list[str]], max_length: int = RERANKER_MAX_LENGTH
+        self,
+        pairs: list[list[str]],
+        max_length: int = RERANKER_MAX_LENGTH,
+        batch_size: int = 8,
     ) -> list[float]:
         if not pairs:
             return []
-        inputs = self.tokenizer(
-            pairs,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors="np",
-        )
-        onnx_inputs = {
-            "input_ids": inputs["input_ids"],
-            "attention_mask": inputs["attention_mask"],
-        }
-        outputs = self.session.run(None, onnx_inputs)
-        scores = outputs[0].flatten().tolist()
-        return [float(s) for s in scores]
+
+        all_scores: list[float] = []
+        for i in range(0, len(pairs), batch_size):
+            batch_pairs = pairs[i : i + batch_size]
+            inputs = self.tokenizer(
+                batch_pairs,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="np",
+            )
+            onnx_inputs = {
+                "input_ids": inputs["input_ids"],
+                "attention_mask": inputs["attention_mask"],
+            }
+            outputs = self.session.run(None, onnx_inputs)
+            scores = outputs[0].flatten().tolist()
+            all_scores.extend([float(s) for s in scores])
+        return all_scores
 
 
 def _load_onnx_reranker(model_id_or_path: str) -> ONNXReranker:
@@ -414,3 +422,88 @@ def rerank_dicts(
         )
 
     return top_records
+
+
+# ── CRAG Reranker Protocol & Interfaces ─────────────────────────
+import math
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Reranker(Protocol):
+    """Protocol defining the reranker scoring interface."""
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        """Score candidate texts against query. Returns float scores in [0, 1]."""
+        ...
+
+
+class JinaReranker:
+    """
+    Quantized Jina cross-encoder reranker wrapper implementing the Reranker protocol.
+    """
+
+    def __init__(self, model_id: str = RERANKER_QUANTIZED_MODEL):
+        self.model_id = model_id
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        if not texts:
+            return []
+        if not query.strip():
+            return [0.0] * len(texts)
+
+        try:
+            scores = _compute_scores(query, texts)
+            if scores is not None and len(scores) == len(texts):
+                clamped = []
+                for s in scores:
+                    val = float(s)
+                    if val < 0.0 or val > 1.0:
+                        try:
+                            val = 1.0 / (1.0 + math.exp(-val))
+                        except OverflowError:
+                            val = 0.0 if val < 0 else 1.0
+                    clamped.append(max(0.0, min(1.0, val)))
+                return clamped
+        except Exception as exc:
+            logger.warning(f"Jina reranker inference error: {exc}")
+
+        # Fallback heuristic
+        return [self._token_overlap_score(query, t) for t in texts]
+
+    @staticmethod
+    def _token_overlap_score(query: str, text: str) -> float:
+        q_words = set(query.lower().split())
+        if not q_words:
+            return 0.0
+        t_words = set(text.lower().split())
+        overlap = len(q_words & t_words)
+        return min(1.0, max(0.0, overlap / len(q_words)))
+
+
+class MockReranker:
+    """Mock reranker for deterministic unit and integration tests."""
+
+    def __init__(
+        self,
+        scores: list[float] | None = None,
+        score_map: dict[str, float] | None = None,
+        fail: bool = False,
+    ):
+        self.scores = scores
+        self.score_map = score_map or {}
+        self.fail = fail
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        self.calls.append((query, list(texts)))
+        if self.fail:
+            raise RuntimeError("Simulated reranker failure")
+        if self.scores is not None:
+            if len(self.scores) >= len(texts):
+                return self.scores[: len(texts)]
+            return self.scores + [0.5] * (len(texts) - len(self.scores))
+        if self.score_map:
+            return [self.score_map.get(t, 0.5) for t in texts]
+        return [0.75] * len(texts)
+

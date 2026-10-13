@@ -9,6 +9,7 @@ from typing import Optional, Any
 from src.config import settings
 from src.database import get_supabase, get_auth_supabase
 from src.rag.rag import rag_answer, extract_chat_title, rag_answer_stream
+from src.rag.crag import run_crag, run_crag_stream
 from src.rag.tracing import ChatTracer, post_user_feedback
 from src.rag.constants import REFUSAL_PREFIXES
 from src.dependencies import get_current_user, get_current_user_id, DEV_USER_ID, _verify_token_cached
@@ -108,7 +109,7 @@ async def websocket_chat(websocket: WebSocket):
         return
 
     token = auth_data.get("token")
-    user_id = _authenticate_ws_token(token)
+    user_id = await asyncio.to_thread(_authenticate_ws_token, token)
 
     if not user_id:
         logger.warning("WS auth handshake failed: invalid or expired token")
@@ -137,8 +138,8 @@ async def websocket_chat(websocket: WebSocket):
             continue
 
         query = data.get("query", "").strip()
-        if not query:
-            await websocket.send_json({"type": "error", "message": "Query cannot be empty"})
+        if len(query) < 2:
+            await websocket.send_json({"type": "error", "message": "Query must be at least 2 characters"})
             continue
 
         material_id = data.get("material_id")
@@ -147,7 +148,7 @@ async def websocket_chat(websocket: WebSocket):
 
         # Material ownership check for pdf/url sources
         if source_type in ("pdf", "url") and material_id:
-            mat = get_material(material_id)
+            mat = await asyncio.to_thread(get_material, material_id)
             if not mat:
                 await websocket.send_json({"type": "error", "message": f"No {source_type} material found."})
                 continue
@@ -160,16 +161,16 @@ async def websocket_chat(websocket: WebSocket):
         seed_msgs = None
         if session_id:
             try:
-                seed_msgs = get_session_messages(session_id)
+                seed_msgs = await asyncio.to_thread(get_session_messages, session_id)
             except Exception:
                 seed_msgs = None
 
-        memory, memory_id = get_or_create_memory(mem_key, seed_messages=seed_msgs)
+        memory, memory_id = await asyncio.to_thread(get_or_create_memory, mem_key, seed_msgs)
 
         # Persist user message to session DB immediately
         if session_id:
             try:
-                append_session_message(session_id, "user", query)
+                await asyncio.to_thread(append_session_message, session_id, "user", query)
             except Exception as e:
                 logger.warning(f"Failed to append user session message: {e}")
 
@@ -185,41 +186,61 @@ async def websocket_chat(websocket: WebSocket):
         # Summary fallback
         summary_text = ""
         if material_id:
-            mat_summary = get_summary(material_id)
+            mat_summary = await asyncio.to_thread(get_summary, material_id)
             summary_text = mat_summary.get("summary", "") if mat_summary else ""
 
-        # Stream response
+        async def send_intent(intent_val: str):
+            try:
+                await websocket.send_json({"type": "intent", "intent": intent_val, "session_id": session_id})
+            except Exception:
+                pass
+
+        # Stream response using CRAG
         full_answer_parts = []
+        is_material = bool(source_type in ("pdf", "url") and material_id)
         try:
-            async for token_chunk in rag_answer_stream(
-                query=query,
-                material_id=material_id,
-                summaries=summary_text,
-                memory=memory,
+            async for token_chunk in run_crag_stream(
+                question=query,
+                material_id=material_id if is_material else None,
                 tracer=tracer,
+                on_intent=send_intent,
             ):
                 full_answer_parts.append(token_chunk)
                 await websocket.send_text(token_chunk)
+
+            # Signal stream completion to frontend IMMEDIATELY so the UI unlocks with zero delay
+            await websocket.send_text("[DONE]")
+            await websocket.send_json({"type": "done", "run_id": tracer.run_id if tracer else None, "session_id": session_id})
 
             full_answer = "".join(full_answer_parts)
             cleaned_answer = clean_summary(full_answer)
             is_refusal = any(cleaned_answer.strip().startswith(p) for p in REFUSAL_PREFIXES)
 
-            # Persist assistant response if not a refusal
+            # Persist assistant response if not a refusal (safely in background thread)
             if session_id and not is_refusal:
                 try:
-                    append_session_message(session_id, "assistant", cleaned_answer)
+                    await asyncio.to_thread(append_session_message, session_id, "assistant", cleaned_answer)
                 except Exception as e:
                     logger.warning(f"Failed to append assistant session message: {e}")
 
-            if session_id and not is_refusal:
-                append_memory_message(memory_id, "user", query)
-                append_memory_message(memory_id, "assistant", cleaned_answer)
+                try:
+                    await asyncio.to_thread(append_memory_message, memory_id, "user", query)
+                    await asyncio.to_thread(append_memory_message, memory_id, "assistant", cleaned_answer)
+                except Exception as e:
+                    logger.warning(f"Failed to append memory message: {e}")
 
-            # Finish parent trace; send run_id so the frontend can post feedback
+            if memory and not is_refusal:
+                try:
+                    memory.save_context({"input": query}, {"output": cleaned_answer})
+                except Exception:
+                    pass
+
+            # Finish parent trace in a separate thread so LangSmith synchronous network calls do not block the event loop
             if tracer:
-                tracer.finish(cleaned_answer)
-            await websocket.send_json({"type": "done", "run_id": tracer.run_id if tracer else None})
+                try:
+                    await asyncio.to_thread(tracer.finish, cleaned_answer)
+                except Exception as e:
+                    logger.warning(f"Failed to finish tracer: {e}")
 
         except WebSocketDisconnect:
             logger.info(f"WebSocket client disconnected during streaming for user {user_id}")
@@ -238,11 +259,9 @@ async def websocket_chat(websocket: WebSocket):
             if tracer:
                 tracer.finish_error(e)
             try:
-                await websocket.send_json({"type": "error", "message": f"Error generating answer: {str(e)}"})
+                await websocket.send_json({"type": "error", "message": f"Error generating answer: {str(e)}", "session_id": session_id})
             except Exception:
                 pass
-
-
 
 
 @router.post("/ask", response_model=TutorResponse)
@@ -251,8 +270,8 @@ async def ask_tutor(
     user_id: str = Depends(get_current_user_id),
     current_user=Depends(get_current_user),
 ):
-    if not body.query.strip():
-        raise HTTPException(400, "Query cannot be empty")
+    if len(body.query.strip()) < 2:
+        raise HTTPException(400, "Query must be at least 2 characters")
 
     # Determine memory key (prefer session_id for persistence)
     mem_key = body.session_id or body.memory_id
@@ -261,15 +280,15 @@ async def ask_tutor(
     seed_msgs: list[dict] | None = None
     if body.session_id:
         try:
-            seed_msgs = get_session_messages(body.session_id)
+            seed_msgs = await asyncio.to_thread(get_session_messages, body.session_id)
         except Exception:
             seed_msgs = None
 
-    memory, memory_id = get_or_create_memory(mem_key, seed_messages=seed_msgs)
+    memory, memory_id = await asyncio.to_thread(get_or_create_memory, mem_key, seed_msgs)
     # Persist user message immediately so it's not lost if generation takes time
     if body.session_id:
         try:
-            append_session_message(body.session_id, "user", body.query.strip())
+            await asyncio.to_thread(append_session_message, body.session_id, "user", body.query.strip())
         except Exception:
             pass
 
@@ -278,45 +297,29 @@ async def ask_tutor(
         user_id     = user_id,
         session_id  = body.session_id,
         material_id = body.material_id,
-        feature     = "rag_chat",
+        feature     = "crag_chat",
     )
     tracer.start(body.query, source_type=body.source_type)
 
     try:
-        loop = asyncio.get_event_loop()
+        is_material = bool(body.source_type in ("pdf", "url") and body.material_id)
         if body.source_type in ("pdf", "url"):
-            mat = get_material(body.material_id) if body.material_id else None
+            mat = await asyncio.to_thread(get_material, body.material_id) if body.material_id else None
             if not mat:
                 raise HTTPException(400, f"No {body.source_type} material found. Upload one first.")
             if mat.get("user_id") != user_id:
                 raise HTTPException(403, "Access denied")
 
-            material_id = body.material_id
+        final_ans = await run_crag(
+            question=body.query,
+            material_id=body.material_id if is_material else None,
+            tracer=tracer,
+        )
+        answer = final_ans.answer
+        source = f"{body.source_type.upper()} (CRAG)" if is_material else "CRAG"
 
-            # Fetch summary to be used as fallback in rag_answer
-            mat_summary = get_summary(material_id)
-            summary_text = mat_summary.get("summary", "") if mat_summary else ""
-
-            # Use rag_answer for both "ready" and other statuses (if chunks exist)
-            answer, memory = await loop.run_in_executor(
-                None,
-                lambda: rag_answer(
-                    query=body.query,
-                    material_id=material_id,
-                    memory=memory,
-                    summaries=summary_text,
-                    tracer=tracer,
-                )
-            )
-            source = f"{body.source_type.upper()} (embeddings vector)"
-
-        else:
-            answer, memory = await loop.run_in_executor(
-                None,
-                lambda: rag_answer(query=body.query, material_id=body.material_id, memory=memory, tracer=tracer)
-            )
-            source = "Web Search"
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in ask_tutor: {str(e)}", exc_info=True)
         tracer.finish_error(e)
@@ -331,17 +334,23 @@ async def ask_tutor(
     # Persist assistant response (only if not a refusal)
     if body.session_id and not is_refusal:
         try:
-            append_session_message(body.session_id, "assistant", cleaned_answer)
+            await asyncio.to_thread(append_session_message, body.session_id, "assistant", cleaned_answer)
         except Exception:
             pass  # don't fail the response if saving fails
 
     # Keep Redis memory cache in sync (append user + assistant messages)
     if body.session_id and not is_refusal:
-        append_memory_message(memory_id, "user", body.query.strip())
-        append_memory_message(memory_id, "assistant", cleaned_answer)
+        await asyncio.to_thread(append_memory_message, memory_id, "user", body.query.strip())
+        await asyncio.to_thread(append_memory_message, memory_id, "assistant", cleaned_answer)
+
+    if memory and not is_refusal:
+        try:
+            memory.save_context({"input": body.query.strip()}, {"output": cleaned_answer})
+        except Exception:
+            pass
 
     # Close parent trace
-    tracer.finish(cleaned_answer)
+    tracer.finish(cleaned_answer, used_fallback=final_ans.low_confidence)
 
     return TutorResponse(
         answer=cleaned_answer,
@@ -349,6 +358,7 @@ async def ask_tutor(
         time_taken=elapsed,
         memory_id=memory_id,
         run_id=tracer.run_id,
+        intent=final_ans.intent,
     )
 
 

@@ -95,6 +95,7 @@ function buildHeaders(token: string | null): HeadersInit {
 }
 
 let _forceSignOutListeners: Array<() => void> = []
+let _forceSignOutTimer: ReturnType<typeof setTimeout> | null = null
 
 export function onForceSignOut(cb: () => void): () => void {
   _forceSignOutListeners.push(cb)
@@ -438,7 +439,7 @@ export const materialsAPI = {
 
 export const tutorAPI = {
   ask: (query: string, source_type: string, material_id?: string, session_id?: string) =>
-    fetchAPI<{ answer: string; source: string; time_taken: number; memory_id: string }>('/api/tutor/ask', {
+    fetchAPI<{ answer: string; source: string; time_taken: number; memory_id: string; intent?: string }>('/api/tutor/ask', {
       method: 'POST',
       body: JSON.stringify({ query, source_type, material_id, session_id }),
     }),

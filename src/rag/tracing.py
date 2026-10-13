@@ -469,7 +469,10 @@ class ChatTracer:
         usage:          Optional[dict] = None,   # {"input_tokens": N, "output_tokens": M}
         ttft_ms:        Optional[float] = None,  # time-to-first-token in ms (streaming only)
         is_fallback:    bool = False,
-        role:           Optional[str] = None,    # "primary" | "fallback" | "router"
+        role:           Optional[str] = None,    # "primary" | "fallback" | "router" | "evaluator"
+        latency_ms:     Optional[float] = None,
+        input_chunks:   Optional[list] = None,
+        output_text:    Optional[str] = None,
     ) -> None:
         """Log the LLM invocation as a child span including dynamic cost estimate."""
         if not self._run_obj:
@@ -493,6 +496,8 @@ class ChatTracer:
             # Fallback estimation if token usage is 0 (common in streaming)
             if input_tokens == 0 and prompt_text:
                 input_tokens = max(1, len(prompt_text) // 4)
+            if output_tokens == 0 and output_text:
+                output_tokens = max(1, len(output_text) // 4)
 
             cost_usd, pricing_mode = _estimate_cost(
                 model=model,
@@ -501,15 +506,33 @@ class ChatTracer:
                 is_gemini_exceeded=is_exceeded,
             )
 
+            child_inputs = {
+                "prompt_preview": prompt_text[:500] if prompt_text else "",
+                "model":          model,
+                "settings":       model_settings,
+                "pricing_mode":   pricing_mode,
+            }
+            if input_chunks:
+                child_inputs["retrieved_chunks_count"] = len(input_chunks)
+                child_inputs["retrieved_chunks_input"] = [
+                    {
+                        "id": getattr(c, "id", None) or (c.get("id") if isinstance(c, dict) else None),
+                        "source": getattr(c, "source", None) or (c.get("source") if isinstance(c, dict) else None),
+                        "score": getattr(c, "score", None) if hasattr(c, "score") else (c.get("score") if isinstance(c, dict) else None),
+                        "preview": getattr(c, "text", "")[:120] if hasattr(c, "text") else (str(c.get("text", ""))[:120] if isinstance(c, dict) else str(c)[:120]),
+                    }
+                    for c in input_chunks
+                ]
+
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            start_ts = (now - timedelta(milliseconds=latency_ms)) if latency_ms is not None else now
+
             child = self._run_obj.create_child(
-                name     = f"llm/{span_role}",
-                run_type = "llm",
-                inputs   = {
-                    "prompt_preview": prompt_text[:500],
-                    "model":          model,
-                    "settings":       model_settings,
-                    "pricing_mode":   pricing_mode,
-                },
+                name       = f"llm/{span_role}",
+                run_type   = "llm",
+                inputs     = child_inputs,
+                start_time = start_ts,
             )
             span_outputs = {
                 "input_tokens":  input_tokens,
@@ -518,6 +541,15 @@ class ChatTracer:
                 "cost_usd":      round(cost_usd, 6),
                 "pricing_mode":  pricing_mode,
             }
+            if output_text:
+                span_outputs["output_preview"] = output_text[:500]
+
+            if latency_ms is not None:
+                span_outputs["latency_ms"] = round(latency_ms, 2)
+                span_outputs["latency_seconds"] = round(latency_ms / 1000.0, 3)
+                if hasattr(child, "extra") and isinstance(child.extra, dict):
+                    child.extra.setdefault("metadata", {})["latency_ms"] = round(latency_ms, 1)
+
             if gemini_stats:
                 span_outputs["gemini_request_count_today"] = gemini_stats["request_count"]
                 span_outputs["gemini_free_requests_limit"] = gemini_stats["limit"]
@@ -526,10 +558,47 @@ class ChatTracer:
             if ttft_ms is not None:
                 span_outputs["ttft_ms"] = round(ttft_ms, 1)
 
-            child.end(outputs=span_outputs)
+            child.end(end_time=now, outputs=span_outputs)
             child.post()
         except Exception as exc:
             log.debug(f"LangSmith log_llm_call failed: {exc}")
+
+    def log_node(
+        self,
+        name: str,
+        run_type: str = "chain",
+        inputs: Optional[dict] = None,
+        outputs: Optional[dict] = None,
+        latency_ms: Optional[float] = None,
+        error: Optional[Exception] = None,
+    ) -> None:
+        """Log an arbitrary graph node execution as a completed child span."""
+        if not self._run_obj:
+            return
+        try:
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            start_ts = (now - timedelta(milliseconds=latency_ms)) if latency_ms is not None else now
+            child = self._run_obj.create_child(
+                name=name,
+                run_type=run_type,
+                inputs=inputs or {},
+                start_time=start_ts,
+            )
+            out = dict(outputs or {})
+            if latency_ms is not None:
+                out["latency_ms"] = round(latency_ms, 2)
+                out["latency_seconds"] = round(latency_ms / 1000.0, 3)
+                if hasattr(child, "extra") and isinstance(child.extra, dict):
+                    child.extra.setdefault("metadata", {})["latency_ms"] = round(latency_ms, 1)
+
+            if error is not None:
+                child.end(end_time=now, error=f"{type(error).__name__}: {error}")
+            else:
+                child.end(end_time=now, outputs=out)
+            child.post()
+        except Exception as exc:
+            log.debug(f"LangSmith log_node failed for {name}: {exc}")
 
     def log_error(self, stage: str, error: Exception) -> None:
         """Log a recoverable error (e.g. primary LLM rate-limit) as a child span."""

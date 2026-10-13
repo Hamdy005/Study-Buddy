@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Force PyTorch path, disable TensorFlow / Keras 3 detection in Transformers
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_TORCH", "1")
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
@@ -96,23 +100,23 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Reranker failed to load or warmup at startup: {e}")
 
     # Eagerly load ASR models so warmup runs at startup, not on first request
-    try:
-        from src.asr.models import get_audio_model_en
-        get_audio_model_en()
-    except Exception as e:
-        logger.warning(f"English ASR model failed to load: {e}")
+    # try:
+    #     from src.asr.models import get_audio_model_en
+    #     get_audio_model_en()
+    # except Exception as e:
+    #     logger.warning(f"English ASR model failed to load: {e}")
 
-    try:
-        from src.asr.models import get_audio_model_ar
-        get_audio_model_ar()
-    except Exception as e:
-        logger.warning(f"Arabic ASR model failed to load: {e}")
+    # try:
+    #     from src.asr.models import get_audio_model_ar
+    #     get_audio_model_ar()
+    # except Exception as e:
+    #     logger.warning(f"Arabic ASR model failed to load: {e}")
 
-    from src.rag.batch_workers import start_workers
-    start_workers()
+    # from src.rag.batch_workers import start_workers
+    # start_workers()
 
-    from src.asr.batch_workers import start_asr_workers
-    start_asr_workers()
+    # from src.asr.batch_workers import start_asr_workers
+    # start_asr_workers()
 
     yield
 

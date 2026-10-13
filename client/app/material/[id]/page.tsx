@@ -967,6 +967,38 @@ function SummaryTab({ materialId, sourceType, materialTitle, isGenerating, setIs
   )
 }
 
+function classifyQueryIntentOptimistic(query: string): 'simple' | 'complex' | 'chitchat' | 'unsafe' | null {
+  const q = query.trim().toLowerCase()
+  if (!q) return null
+
+  // Chitchat fast check (matching backend regex/patterns)
+  const chitchatRegex = /^\s*(hi|hey|hello|yo|thanks?|thank you|ok|okay|bye|good (morning|afternoon|evening|night|day)|مرحبا|أ?اهلا|السلام عليكم|شكرا|تمام|باي|مع السلامة)[\s.,!؟?~:;()\-]*$/i
+  if (q.length < 2 || chitchatRegex.test(q)) {
+    return 'chitchat'
+  }
+
+  // Unsafe / gibberish fast check
+  const keyboardRows = ['asdf', 'qwer', 'zxcv', 'hjkl', 'sdfg', 'dfgh', 'qazwsx']
+  for (const row of keyboardRows) {
+    if (q.includes(row)) return 'unsafe'
+  }
+  if (/(.)\1{4,}/.test(q)) {
+    return 'unsafe'
+  }
+
+  // Complex query heuristics (multi-part, comparisons, derivations, etc.)
+  const hasMultipleQuestions = (query.match(/\?|؟/g) || []).length > 1
+  const hasComparison = /\b(compare|contrast|difference between|versus|\bvs\b|\bvs\.\b|pros and cons|advantages and disadvantages|trade-offs?|tradeoffs?)\b/i.test(query)
+  const hasMultiPart = /\b(and also|explain both|in addition to|as well as|firstly.*secondly|step-by-step|step by step)\b/i.test(query)
+  const isDetailedQuery = query.split(/\s+/).length > 35
+
+  if (hasMultipleQuestions || hasComparison || hasMultiPart || isDetailedQuery) {
+    return 'complex'
+  }
+
+  return 'simple'
+}
+
 function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   materialId: string
   sourceType: string
@@ -980,6 +1012,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [wsFallback, setWsFallback] = useState(false)
+  const [currentQueryIntent, setCurrentQueryIntent] = useState<'simple' | 'complex' | 'chitchat' | 'unsafe' | null>(null)
   const [isSessionsLoading, setIsSessionsLoading] = useState(true)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -995,27 +1028,39 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const lastUserMessageRef = useRef<HTMLDivElement | null>(null)
   const shouldScrollToUserRef = useRef(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
+  const sessionSocketsRef = useRef<Map<string, WebSocket>>(new Map())
   const isMounted = useRef(true)
+
+  const currentSessionIdRef = useRef<string | null>(null)
+  currentSessionIdRef.current = currentSessionId
+
+  // Track in-flight streaming responses per session so switching back restores live stream state
+  const activeStreamsRef = useRef<Map<string, {
+    userMessage?: ChatMessage
+    content: string
+    isStreaming: boolean
+    intent: 'simple' | 'complex' | 'chitchat' | 'unsafe' | null
+  }>>(new Map())
 
   useEffect(() => {
     isMounted.current = true
     return () => {
       isMounted.current = false
-      if (wsRef.current) {
-        try { wsRef.current.close() } catch {}
-        wsRef.current = null
-      }
+      sessionSocketsRef.current.forEach((ws) => {
+        try { ws.close() } catch {}
+      })
+      sessionSocketsRef.current.clear()
     }
   }, [])
 
-  const getOrConnectWebSocket = async (): Promise<WebSocket> => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      return wsRef.current
+  const getOrConnectSessionWebSocket = async (sessionId: string): Promise<WebSocket> => {
+    const existing = sessionSocketsRef.current.get(sessionId)
+    if (existing && existing.readyState === WebSocket.OPEN) {
+      return existing
     }
-    if (wsRef.current) {
-      try { wsRef.current.close() } catch {}
-      wsRef.current = null
+    if (existing) {
+      try { existing.close() } catch {}
+      sessionSocketsRef.current.delete(sessionId)
     }
 
     const token = getApiToken()
@@ -1038,7 +1083,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
           if (data.type === 'auth_ok') {
             if (authTimeout) clearTimeout(authTimeout)
             authTimeout = null
-            wsRef.current = ws
+            sessionSocketsRef.current.set(sessionId, ws)
             resolve(ws)
           }
         } catch {
@@ -1054,7 +1099,9 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
       ws.onclose = () => {
         if (authTimeout) clearTimeout(authTimeout)
-        if (wsRef.current === ws) wsRef.current = null
+        if (sessionSocketsRef.current.get(sessionId) === ws) {
+          sessionSocketsRef.current.delete(sessionId)
+        }
       }
     })
   }
@@ -1073,16 +1120,21 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
         // If the last message is from assistant, we are done
         if (formatted.length > 0 && formatted[formatted.length - 1].role === 'assistant') {
-          if (isMounted.current) {
+          if (isMounted.current && currentSessionIdRef.current === sid) {
             setMessages(formatted)
             setIsLoading(false)
-            localStorage.removeItem(`waiting_chat_${sid}`)
-            clearInterval(pollingRef.current!)
+            setIsStreaming(false)
+            setCurrentQueryIntent(null)
+          }
+          localStorage.removeItem(`waiting_chat_${sid}`)
+          activeStreamsRef.current.delete(sid)
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current)
             pollingRef.current = null
           }
         }
       } catch { }
-    }, 3000)
+    }, 2500)
   }
 
   const isInitializingRef = useRef(false)
@@ -1122,16 +1174,42 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
   useEffect(() => {
     if (currentSessionId) {
-      const loadMessages = async () => {
-        const sid = currentSessionId!
+      const sid = currentSessionId!
 
-        // Check if we were waiting for a response in this session
+      // Check if this session is currently actively streaming
+      const activeStream = activeStreamsRef.current.get(sid)
+      if (activeStream && activeStream.isStreaming) {
+        setIsLoading(true)
+        setIsStreaming(true)
+        setCurrentQueryIntent(activeStream.intent)
+
+        // Immediately populate messages with user question and streaming assistant placeholder
+        // so switching between active chats never blanks the question
+        const initialMsgs: ChatMessage[] = []
+        if (activeStream.userMessage) {
+          initialMsgs.push(activeStream.userMessage)
+        }
+        initialMsgs.push({
+          id: `streaming-${sid}`,
+          role: 'assistant',
+          content: activeStream.content,
+          timestamp: new Date().toISOString(),
+        })
+        setMessages(initialMsgs)
+      } else {
         const wasWaiting = localStorage.getItem(`waiting_chat_${sid}`) === 'true'
         if (wasWaiting) {
           setIsLoading(true)
+          setIsStreaming(false)
           startChatPoller(sid)
+        } else {
+          setIsLoading(false)
+          setIsStreaming(false)
+          setCurrentQueryIntent(null)
         }
+      }
 
+      const loadMessages = async () => {
         try {
           const data = await tutorAPI.getSessionMessages(sid)
           const formatted: ChatMessage[] = data.map((m: any) => ({
@@ -1141,30 +1219,65 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
             timestamp: m.created_at || new Date().toISOString()
           }))
 
-          if (isMounted.current) {
-            setMessages(formatted)
+          if (isMounted.current && currentSessionIdRef.current === sid) {
+            const currentActive = activeStreamsRef.current.get(sid)
+            if (currentActive && currentActive.isStreaming) {
+              // Ensure user message is not lost even if DB has not persisted it yet
+              if (currentActive.userMessage && !formatted.some(m => m.role === 'user' && m.content === currentActive.userMessage?.content)) {
+                formatted.push(currentActive.userMessage)
+              }
 
-            // If we were waiting but the assistant message is already here
-            if (wasWaiting && formatted.length > 0 && formatted[formatted.length - 1].role === 'assistant') {
-              setIsLoading(false)
-              localStorage.removeItem(`waiting_chat_${sid}`)
-              if (pollingRef.current) {
-                clearInterval(pollingRef.current)
-                pollingRef.current = null
+              // If the DB does not yet have the assistant message, preserve the live in-flight streaming message
+              if (formatted.length === 0 || formatted[formatted.length - 1].role !== 'assistant') {
+                formatted.push({
+                  id: `streaming-${sid}`,
+                  role: 'assistant',
+                  content: currentActive.content,
+                  timestamp: new Date().toISOString(),
+                })
+              }
+              setMessages(formatted)
+              setIsLoading(true)
+              setIsStreaming(true)
+              setCurrentQueryIntent(currentActive.intent)
+            } else {
+              setMessages(formatted)
+              const wasWaiting = localStorage.getItem(`waiting_chat_${sid}`) === 'true'
+              if (wasWaiting) {
+                if (formatted.length === 0 || formatted[formatted.length - 1].role === 'assistant') {
+                  setIsLoading(false)
+                  localStorage.removeItem(`waiting_chat_${sid}`)
+                  if (pollingRef.current) {
+                    clearInterval(pollingRef.current)
+                    pollingRef.current = null
+                  }
+                }
               }
             }
           }
         } catch (err) {
           console.error('Failed to load messages', err)
+          if (isMounted.current && currentSessionIdRef.current === sid) {
+            const currentActive = activeStreamsRef.current.get(sid)
+            if (!currentActive?.isStreaming) {
+              setIsLoading(false)
+            }
+          }
         }
       }
       loadMessages()
     } else {
       setMessages([])
+      setIsLoading(false)
+      setIsStreaming(false)
+      setCurrentQueryIntent(null)
     }
 
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current)
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
     }
   }, [currentSessionId])
 
@@ -1188,6 +1301,9 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       setSessions([...sessions, newSession])
       setCurrentSessionId(newSession.id)
       setMessages([])
+      setIsLoading(false)
+      setIsStreaming(false)
+      setCurrentQueryIntent(null)
     } catch (err) {
       toast.error('Failed to create new session')
     } finally {
@@ -1198,6 +1314,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   const deleteSession = async (sid: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
+      const ws = sessionSocketsRef.current.get(sid)
+      if (ws) {
+        try { ws.close() } catch {}
+        sessionSocketsRef.current.delete(sid)
+      }
+      activeStreamsRef.current.delete(sid)
       await tutorAPI.deleteSession(sid)
       const updated = sessions.filter(s => s.id !== sid)
       setSessions(updated)
@@ -1226,7 +1348,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   }
 
   const sendMessage = async () => {
-    if (!input.trim() || isLoading) return
+    if (input.trim().length < 2 || isLoading) return
 
     let sessionId = currentSessionId
     if (!sessionId) {
@@ -1243,21 +1365,36 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
     const currentInput = input.trim()
     setInput('')
-    setMessages((prev) => [
-      ...prev,
-      { id: Date.now().toString(), role: 'user', content: currentInput, timestamp: new Date().toISOString() },
-    ])
+    const userMsg: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: currentInput,
+      timestamp: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, userMsg])
     setIsLoading(true)
     shouldScrollToUserRef.current = true
 
-    // Attempt WebSocket connection with exponential back-off retries
+    const initialIntent = classifyQueryIntentOptimistic(currentInput)
+    setCurrentQueryIntent(initialIntent)
+
+    // Track active background streaming state per session
+    activeStreamsRef.current.set(sessionId, {
+      userMessage: userMsg,
+      content: '',
+      isStreaming: true,
+      intent: initialIntent,
+    })
+    localStorage.setItem(`waiting_chat_${sessionId}`, 'true')
+
+    // Attempt WebSocket connection for this specific session with exponential back-off retries
     let ws: WebSocket | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        ws = await getOrConnectWebSocket()
+        ws = await getOrConnectSessionWebSocket(sessionId)
         if (ws && ws.readyState === WebSocket.OPEN) break
       } catch (err) {
-        console.warn(`WebSocket connection attempt ${attempt + 1} failed:`, err)
+        console.warn(`WebSocket connection attempt ${attempt + 1} failed for session ${sessionId}:`, err)
         if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
       }
     }
@@ -1269,19 +1406,43 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       // Append initial assistant message for live streaming
       setMessages((prev) => [
         ...prev,
-        { id: (Date.now() + 1).toString(), role: 'assistant', content: '', timestamp: new Date().toISOString() },
+        { id: `streaming-${sessionId}`, role: 'assistant', content: '', timestamp: new Date().toISOString() },
       ])
 
-      const handleStreamComplete = () => {
+      let watchdogTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
         if (isMounted.current) {
+          console.warn('Chat stream safety watchdog timeout triggered')
+          activeStreamsRef.current.delete(sessionId)
+          localStorage.removeItem(`waiting_chat_${sessionId}`)
+          if (currentSessionIdRef.current === sessionId) {
+            setIsStreaming(false)
+            setIsLoading(false)
+          }
+        }
+      }, 60000)
+
+      const handleStreamComplete = () => {
+        if (watchdogTimer) {
+          clearTimeout(watchdogTimer)
+          watchdogTimer = null
+        }
+        activeStreamsRef.current.delete(sessionId)
+        localStorage.removeItem(`waiting_chat_${sessionId}`)
+
+        if (isMounted.current && currentSessionIdRef.current === sessionId) {
           setIsStreaming(false)
           setIsLoading(false)
+          setCurrentQueryIntent(null)
+        }
 
-          if (sessions.find((s) => s.id === sessionId)?.title === 'Untitled Chat') {
+        // Generate title if Untitled Chat even if the user switched to another session in the meantime
+        if (isMounted.current) {
+          const currentTitle = sessions.find((s) => s.id === sessionId)?.title
+          if (!currentTitle || currentTitle === 'Untitled Chat') {
             tutorAPI
               .extractTitle(sessionId!, currentInput)
               .then((titleData) => {
-                if (isMounted.current) {
+                if (isMounted.current && titleData?.title) {
                   setSessions((prev) =>
                     prev.map((s) => (s.id === sessionId ? { ...s, title: titleData.title } : s))
                   )
@@ -1302,29 +1463,75 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
         try {
           const parsed = JSON.parse(chunk)
+          // Double-check session isolation if session_id is present
+          if (parsed.session_id && parsed.session_id !== sessionId) {
+            return
+          }
           if (parsed.type === 'done') {
             handleStreamComplete()
             return
           }
+          if (parsed.type === 'intent') {
+            const streamState = activeStreamsRef.current.get(sessionId)
+            if (streamState) {
+              streamState.intent = parsed.intent
+            }
+            if (isMounted.current && currentSessionIdRef.current === sessionId) {
+              setCurrentQueryIntent(parsed.intent)
+            }
+            return
+          }
           if (parsed.type === 'error') {
-            if (isMounted.current) {
+            if (watchdogTimer) {
+              clearTimeout(watchdogTimer)
+              watchdogTimer = null
+            }
+            activeStreamsRef.current.delete(sessionId)
+            localStorage.removeItem(`waiting_chat_${sessionId}`)
+            if (isMounted.current && currentSessionIdRef.current === sessionId) {
               toast.error(parsed.message || 'Error generating response')
               setIsStreaming(false)
               setIsLoading(false)
+              setCurrentQueryIntent(null)
             }
             return
           }
         } catch {}
 
-        if (isMounted.current) {
+        // Accumulate chunk in active session buffer
+        const streamState = activeStreamsRef.current.get(sessionId)
+        if (streamState) {
+          streamState.content += chunk
+        }
+
+        // Only update live message state if user is currently looking at this session
+        if (isMounted.current && currentSessionIdRef.current === sessionId) {
           setMessages((prev) => {
-            if (prev.length === 0) return prev
+            const currentContent = streamState ? streamState.content : chunk
+            if (prev.length === 0) {
+              return [{
+                id: `streaming-${sessionId}`,
+                role: 'assistant',
+                content: currentContent,
+                timestamp: new Date().toISOString(),
+              }]
+            }
             const lastIndex = prev.length - 1
-            if (prev[lastIndex].role !== 'assistant') return prev
+            if (prev[lastIndex].role !== 'assistant') {
+              return [
+                ...prev,
+                {
+                  id: `streaming-${sessionId}`,
+                  role: 'assistant',
+                  content: currentContent,
+                  timestamp: new Date().toISOString(),
+                }
+              ]
+            }
             const updated = [...prev]
             updated[lastIndex] = {
               ...updated[lastIndex],
-              content: updated[lastIndex].content + chunk,
+              content: currentContent,
             }
             return updated
           })
@@ -1333,9 +1540,33 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
       ws.onerror = (err) => {
         console.error('WS error during streaming:', err)
-        if (isMounted.current) {
+        if (watchdogTimer) {
+          clearTimeout(watchdogTimer)
+          watchdogTimer = null
+        }
+        activeStreamsRef.current.delete(sessionId)
+        localStorage.removeItem(`waiting_chat_${sessionId}`)
+        if (isMounted.current && currentSessionIdRef.current === sessionId) {
           setIsStreaming(false)
           setIsLoading(false)
+          setCurrentQueryIntent(null)
+        }
+      }
+
+      ws.onclose = () => {
+        if (watchdogTimer) {
+          clearTimeout(watchdogTimer)
+          watchdogTimer = null
+        }
+        activeStreamsRef.current.delete(sessionId)
+        localStorage.removeItem(`waiting_chat_${sessionId}`)
+        if (isMounted.current && currentSessionIdRef.current === sessionId) {
+          setIsStreaming(false)
+          setIsLoading(false)
+          setCurrentQueryIntent(null)
+        }
+        if (sessionSocketsRef.current.get(sessionId) === ws) {
+          sessionSocketsRef.current.delete(sessionId)
         }
       }
 
@@ -1352,6 +1583,9 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       setWsFallback(true)
       try {
         const data = await tutorAPI.ask(currentInput, sourceType, materialId, sessionId!)
+        if (data.intent) {
+          setCurrentQueryIntent(data.intent as any)
+        }
         if (isMounted.current && currentSessionId === sessionId) {
           setMessages((prev) => [
             ...prev,
@@ -1370,7 +1604,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
       } catch {
         if (isMounted.current) toast.error('Failed to get response')
       } finally {
-        if (isMounted.current) setIsLoading(false)
+        activeStreamsRef.current.delete(sessionId!)
+        localStorage.removeItem(`waiting_chat_${sessionId}`)
+        if (isMounted.current && currentSessionIdRef.current === sessionId) {
+          setIsLoading(false)
+          setCurrentQueryIntent(null)
+        }
       }
     }
   }
@@ -1694,10 +1933,17 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                         {m.role === 'user' ? (
                           <p dir="auto" className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
                         ) : !m.content && isStreamingActive ? (
-                          <div className="flex items-center gap-1.5 py-1.5 px-1">
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
+                          <div className="flex items-center gap-2.5 py-1.5 px-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                              <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                              <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
+                            </div>
+                            {currentQueryIntent === 'complex' && (
+                              <span className="text-[13.5px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
+                                This may take some time
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <div className="text-[16.25px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
@@ -1717,13 +1963,17 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                 })}
                 {isLoading && !isStreaming && (
                   <div className="flex justify-start">
-                    <div className="bg-card border border-border/50 rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2">
+                    <div className="bg-card border border-border/50 rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2.5">
                       <div className="flex items-center gap-1.5 py-1 px-0.5">
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
                       </div>
-                      <span className="text-sm text-muted-foreground ml-1">Assistant is thinking...</span>
+                      {currentQueryIntent === 'complex' && (
+                        <span className="text-[13.5px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
+                          This may take some time
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1903,11 +2153,15 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                     <Button
                       type="submit"
                       id="chat-send-button"
-                      disabled={isLoading || !input.trim() || !currentSessionId}
+                      disabled={isLoading || input.trim().length < 2 || !currentSessionId}
                       size="icon"
                       className="h-8 w-8 rounded-lg shadow-sm"
                     >
-                      <Send className="h-3.5 w-3.5" />
+                      {isLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
                     </Button>
                   </div>
                 </div>
