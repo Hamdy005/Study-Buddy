@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir uv && \
-    uv pip install --system --no-cache --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt && \
+    uv pip install --system --no-cache --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt && \
     pip install --no-cache-dir --no-deps nemo_toolkit==2.2.1
 
-COPY . /app
+COPY . /app/src
 
 EXPOSE 7860
 
