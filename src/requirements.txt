@@ -83,7 +83,6 @@ tensorboard==2.20.0
 tensorboard-data-server==0.7.2
 wandb==0.25.0
 mediapy==1.1.6
-texterrors==0.5.1
 editdistance==0.8.1
 braceexpand==0.1.7
 g2p-en==2.1.0
