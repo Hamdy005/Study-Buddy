@@ -63,7 +63,6 @@ pgvector==0.5.1
 # ── Transformers, Tokenizers & ONNX ───────────────────────
 tokenizers==0.21.4
 transformers==4.48.3
-tf-keras==2.16.0
 einops==0.8.2
 sacremoses==0.2.0
 sentencepiece==0.2.2
