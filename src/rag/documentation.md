@@ -8,7 +8,7 @@ This document outlines the architecture, execution workflow, node contracts, and
 
 <div align="center">
   <a href="crag_graph.png" target="_blank" title="Click to view in full resolution">
-    <img src="crag_graph.png" alt="LangGraph CRAG Pipeline Graph" width="360" style="max-height: 60vh; max-width: 360px; width: auto; height: auto; object-fit: contain; border-radius: 8px;" />
+    <img width="2717" height="4096" alt="crag_graph" src="https://github.com/user-attachments/assets/b938e601-bba1-4618-9b10-248157df44d2" />
   </a>
   <br>
   <sub><em>(Click graph to open full resolution)</em></sub>
