@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
 # Install system dependencies for audio processing (soundfile & ffmpeg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
