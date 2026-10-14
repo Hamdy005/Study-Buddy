@@ -14,6 +14,7 @@ from src.rag.constants import (
     DEFAULT_HIGH_THRESHOLD,
     DEFAULT_KEEP_THRESHOLD,
     DEFAULT_LOW_THRESHOLD,
+    DEFAULT_SIMPLE_THRESHOLD,
     DEFAULT_MAX_RETRIES,
     DEFAULT_POOL_MAX,
     DEFAULT_RERANK_WINDOW,
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
 
     HIGH_THRESHOLD: float = Field(default=DEFAULT_HIGH_THRESHOLD, ge=0.0, le=1.0)
     LOW_THRESHOLD: float = Field(default=DEFAULT_LOW_THRESHOLD, ge=0.0, le=1.0)
+    SIMPLE_THRESHOLD: float = Field(default=DEFAULT_SIMPLE_THRESHOLD, ge=0.0, le=1.0)
     KEEP_THRESHOLD: float = Field(default=DEFAULT_KEEP_THRESHOLD, ge=0.0, le=1.0)
 
     TRIAGE_TIMEOUT_S: float = Field(default=DEFAULT_TRIAGE_TIMEOUT_S, ge=1.0, le=30.0)

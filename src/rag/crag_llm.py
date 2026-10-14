@@ -124,6 +124,27 @@ class LangChainLLM:
                 logger.warning(f"Triage structured extraction failed ({exc})")
                 raise exc
 
+        # Fast path for RouterOutput using line parsing (like EvaluatorOutput and TriageOutput)
+        if hasattr(schema, "__name__") and schema.__name__ == "RouterOutput":
+            try:
+                raw_text = await self.ainvoke(prompt)
+                parsed_lines = self._parse_router_lines(raw_text)
+                if parsed_lines is not None:
+                    return schema.model_validate(parsed_lines)
+                # Fallback to JSON if the model formatted as JSON
+                parsed_json = self._extract_json(raw_text)
+                if isinstance(parsed_json, dict):
+                    if "properties" in parsed_json and isinstance(parsed_json["properties"], dict):
+                        parsed_json = parsed_json["properties"]
+                    if not parsed_json.get("sources"):
+                        parsed_json["sources"] = ["supabase", "arxiv", "wikipedia", "web"]
+                    if "search_query" in parsed_json and isinstance(parsed_json["search_query"], str):
+                        parsed_json["search_query"] = parsed_json["search_query"][:300].rstrip()
+                return schema.model_validate(parsed_json)
+            except Exception as exc:
+                logger.warning(f"Router structured extraction failed ({exc})")
+                raise exc
+
         model = self._get_chat_model()
 
         # Try with_structured_output if supported
@@ -142,6 +163,8 @@ class LangChainLLM:
                     if raw and hasattr(raw, "tool_calls") and raw.tool_calls:
                         args = raw.tool_calls[0].get("args", {})
                         if isinstance(args, dict):
+                            if hasattr(schema, "__name__") and schema.__name__ == "RouterOutput" and "search_query" in args and isinstance(args["search_query"], str):
+                                args["search_query"] = args["search_query"][:300].rstrip()
                             return schema.model_validate(args)
                     parsing_err = res_dict.get("parsing_error")
                     raise ValueError(f"Output parser returned parsed=None (error: {parsing_err})")
@@ -158,6 +181,9 @@ class LangChainLLM:
             )
             raw_text = await self.ainvoke(current_prompt)
             parsed = self._extract_json(raw_text)
+            if isinstance(parsed, dict) and hasattr(schema, "__name__") and schema.__name__ == "RouterOutput":
+                if "search_query" in parsed and isinstance(parsed["search_query"], str):
+                    parsed["search_query"] = parsed["search_query"][:300].rstrip()
             return schema.model_validate(parsed)
         except Exception as err:
             logger.error(f"Structured output failed: {err}")
@@ -306,15 +332,71 @@ class LangChainLLM:
         return None
 
     @staticmethod
+    def _parse_router_lines(text: str) -> dict[str, Any] | None:
+        """Parse key-value lines for RouterOutput: SEARCH_QUERY, SOURCES."""
+        search_query = None
+        sources = None
+        in_query = False
+        for raw_line in text.strip().splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            cleaned = re.sub(r"[*#`]", "", line).strip()
+            lower = cleaned.lower()
+            if lower.startswith("search_query:") or lower.startswith("searchquery:") or lower.startswith("query:"):
+                in_query = True
+                search_query = cleaned.split(":", 1)[1].strip()
+            elif lower.startswith("sources:") or lower.startswith("source:"):
+                in_query = False
+                val = cleaned.split(":", 1)[1].strip().lower()
+                raw_srcs = re.findall(r"\b(supabase|wikipedia|arxiv|web)\b", val)
+                if raw_srcs:
+                    sources = list(dict.fromkeys(raw_srcs))
+            elif in_query:
+                if any(lower.startswith(prefix) for prefix in ("sources:", "source:", "note:", "explanation:")):
+                    in_query = False
+                else:
+                    search_query += " " + cleaned
+
+        if not search_query and text.strip():
+            stripped = text.strip()
+            if not (stripped.startswith("{") or stripped.startswith("[")):
+                for raw_line in stripped.splitlines():
+                    cleaned_line = re.sub(r"[*#`]", "", raw_line).strip()
+                    if cleaned_line and not cleaned_line.startswith("<") and len(cleaned_line) >= 2:
+                        lower_line = cleaned_line.lower()
+                        if not any(lower_line.startswith(p) for p in ("here is", "sure", "response:", "output:", "note:")):
+                            search_query = cleaned_line
+                            break
+
+        if search_query:
+            search_query = search_query.strip("\"' ")
+            if len(search_query) > 300:
+                search_query = search_query[:300].rstrip()
+            if len(search_query) >= 2:
+                res: dict[str, Any] = {"search_query": search_query}
+                res["sources"] = sources if sources else ["supabase", "arxiv", "wikipedia", "web"]
+                return res
+        return None
+
+    @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            return json.loads(text[start : end + 1])
-        return json.loads(text)
+            data = json.loads(match.group(1))
+        else:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1:
+                data = json.loads(text[start : end + 1])
+            else:
+                data = json.loads(text)
+
+        # If model echoed the JSON schema definition containing "properties"
+        if isinstance(data, dict) and "properties" in data and isinstance(data["properties"], dict) and "title" in data:
+            data = data["properties"]
+
+        return data
 
 
 class MockLLM:

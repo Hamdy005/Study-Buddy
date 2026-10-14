@@ -134,6 +134,47 @@ def test_schema_router_query_length():
     assert ro.search_query == "valid query"
 
 
+def test_parse_router_lines_formats():
+    from src.rag.crag_llm import LangChainLLM
+
+    # 1. Standard SEARCH_QUERY format
+    text1 = "SEARCH_QUERY: attention mechanism transformer"
+    res1 = LangChainLLM._parse_router_lines(text1)
+    assert res1 is not None
+    assert res1["search_query"] == "attention mechanism transformer"
+    assert "supabase" in res1["sources"]
+
+    # 2. SEARCH_QUERY with sources
+    text2 = "SEARCH_QUERY: deep learning backprop\nSOURCES: arxiv, web"
+    res2 = LangChainLLM._parse_router_lines(text2)
+    assert res2 is not None
+    assert res2["search_query"] == "deep learning backprop"
+    assert set(res2["sources"]) == {"arxiv", "web"}
+
+    # 3. Unprefixed plain query keywords
+    text3 = "quantum error correction surface codes"
+    res3 = LangChainLLM._parse_router_lines(text3)
+    assert res3 is not None
+    assert res3["search_query"] == "quantum error correction surface codes"
+
+
+def test_schema_router_echo_unwrapping_and_extra_fields():
+    # Schema echo unwrapping from LLM
+    echo_dict = {
+        "title": "RouterOutput",
+        "type": "object",
+        "description": "Structured output from the Router node",
+        "properties": {
+            "search_query": "reinforcement learning policy gradient",
+            "sources": ["arxiv", "web"],
+        },
+        "additionalProperties": False,
+    }
+    ro = RouterOutput.model_validate(echo_dict)
+    assert ro.search_query == "reinforcement learning policy gradient"
+    assert ro.sources == ["arxiv", "web"]
+
+
 def test_schema_evaluator_correct_with_non_none_cause_rejected():
     # verdict == correct but likely_cause != none
     with pytest.raises(ValidationError):
@@ -1304,6 +1345,20 @@ def test_simple_query_score_gate_and_retry_all_tools():
     }
     assert score_gate(state_simple_low, settings=cfg) == "retry_check"
 
+    # 3b. Simple query: score 0.30 is <= SIMPLE_THRESHOLD (0.35) -> must retry!
+    state_simple_30: GraphState = {
+        "intent": "simple",
+        "ranked": [Chunk.create("supabase", "borderline relevance", score=0.30)],
+    }
+    assert score_gate(state_simple_30, settings=cfg) == "retry_check"
+
+    # 3c. Simple query: score 0.36 is > SIMPLE_THRESHOLD (0.35) -> generate!
+    state_simple_36: GraphState = {
+        "intent": "simple",
+        "ranked": [Chunk.create("supabase", "acceptable relevance", score=0.36)],
+    }
+    assert score_gate(state_simple_36, settings=cfg) == "generate"
+
     # 4. Complex query: mid score (0.55) must still go to evaluator!
     state_complex_mid: GraphState = {
         "intent": "complex",
@@ -1331,6 +1386,79 @@ def test_simple_query_score_gate_and_retry_all_tools():
     assert retry_res["sources_to_use"] == ["supabase", "arxiv", "wikipedia", "web"]
     assert retry_res["search_query"] == "photosynthesis light dependent reactions"
     assert all(src in retry_res["tool_queries"] for src in ["supabase", "arxiv", "wikipedia", "web"])
+
+
+def test_router_query_over_300_chars_clamped():
+    """Verify that router parsing clamps LLM queries exceeding 300 characters to prevent validation error."""
+    from src.rag.crag_llm import LangChainLLM
+    from src.rag.schemas import RouterOutput
+
+    long_bellman_query = (
+        "distributional Bellman operator contraction mapping properties under Wasserstein metric and "
+        "Kramers-Moyal expansion for continuous-time stochastic processes with non-local jump diffusions "
+        "and heavy-tailed Levy flight perturbations in high-dimensional state representations with "
+        "approximate dynamic programming convergence guarantees"
+    )
+    assert len(long_bellman_query) > 300
+
+    parsed = LangChainLLM._parse_router_lines(f"SEARCH_QUERY: {long_bellman_query}")
+    assert parsed is not None
+    assert len(parsed["search_query"]) <= 300
+    assert parsed["search_query"].startswith("distributional Bellman")
+
+    # Validates without throwing ValidationError
+    ro = RouterOutput.model_validate(parsed)
+    assert len(ro.search_query) <= 300
+
+
+def test_format_chat_history_helper():
+    """Verify format_chat_history extracts last N messages formatted with roles."""
+    from src.rag.constants import format_chat_history
+
+    msgs = [{"role": f"user" if i % 2 == 0 else "assistant", "content": f"Message {i}"} for i in range(12)]
+    formatted = format_chat_history(msgs, limit=8)
+    lines = formatted.strip().splitlines()
+    assert len(lines) == 8
+    assert "Message 4" in lines[0]
+    assert "Message 11" in lines[-1]
+    assert "User:" in lines[0] or "Assistant:" in lines[0]
+
+
+def test_topic_and_history_in_router_and_triage_prompts():
+    """Verify topic and chat history format strings and pronoun guidance are injected into prompts."""
+    from src.rag.constants import (
+        router_user_message,
+        evaluator_user_message,
+        generate_user_message,
+        fallback_user_message,
+    )
+
+    topic = "Quantum Entanglement"
+    history = [
+        {"role": "user", "content": "can u define our topic please"},
+        {"role": "assistant", "content": "Our topic is quantum entanglement."},
+    ]
+
+    # Router user message
+    router_msg = router_user_message({
+        "original_q": "what are its applications?",
+        "topic": topic,
+        "chat_history": history,
+    })
+    assert "<topic>Topic is: Quantum Entanglement</topic>" in router_msg
+    assert "<conversation_history>" in router_msg
+    assert "can u define our topic please" in router_msg
+
+    # Generate user message
+    gen_msg = generate_user_message({
+        "original_q": "what are its applications?",
+        "ranked": [],
+        "topic": topic,
+        "chat_history": history,
+    })
+    assert "<topic>Topic is: Quantum Entanglement</topic>" in gen_msg
+    assert "<conversation_history>" in gen_msg
+
 
 
 

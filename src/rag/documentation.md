@@ -186,8 +186,8 @@ The pipeline processes user queries through three distinct pathways:
 
 - **`score_gate`**:
   - **For Simple Queries (`intent == "simple"`)**:
-    - `top_score > LOW_THRESHOLD (0.2)` $\rightarrow$ `generate` (bypasses evaluator entirely for both mid and high scores to eliminate token waste).
-    - `top_score <= LOW_THRESHOLD (0.2)` $\rightarrow$ `retry_check` $\rightarrow$ retries with **all tools** (`supabase`, `arxiv`, `wikipedia`, `web`) using keyword-style search queries.
+    - `top_score > SIMPLE_THRESHOLD (0.35)` $\rightarrow$ `generate` (bypasses evaluator entirely to eliminate token waste).
+    - `top_score <= SIMPLE_THRESHOLD (0.35)` $\rightarrow$ `retry_check` $\rightarrow$ retries with **all tools** (`supabase`, `arxiv`, `wikipedia`, `web`) using keyword-style search queries.
   - **For Complex Queries (`intent == "complex"`)**:
     - `top_score >= HIGH_THRESHOLD (0.8)` $\rightarrow$ `generate` (high confidence shortcut)
     - `top_score <= LOW_THRESHOLD (0.2)` $\rightarrow$ `retry_check` (immediate retry)
@@ -198,8 +198,8 @@ The pipeline processes user queries through three distinct pathways:
   - `verdict in {"ambiguous", "incorrect"}` $\rightarrow$ `retry_check`
 
 - **`retry_check_gate`**:
-  - `retries <= MAX_RETRIES (1)` $\rightarrow$ `router` (retry requerying missing facts)
-  - `retries > MAX_RETRIES (1)` $\rightarrow$ `fallback` (exhausted retries)
+  - `retries <= MAX_RETRIES (2)` $\rightarrow$ `router` (retry requerying missing facts)
+  - `retries > MAX_RETRIES (2)` $\rightarrow$ `fallback` (exhausted retries)
 
 ---
 
@@ -210,9 +210,10 @@ All runtime thresholds and parameters are defined in `src/rag/constants.py` and 
 | Parameter | Default | Purpose / Behavior |
 | :--- | :--- | :--- |
 | `HIGH_THRESHOLD` | `0.8` | Quality cutoff. If top rerank score $\ge 0.8$, skips evaluator and answers immediately. |
-| `LOW_THRESHOLD` | `0.2` | Minimum viability floor. If top score $\le 0.2$, skips evaluator and triggers corrective search. |
+| `LOW_THRESHOLD` | `0.2` | Minimum viability floor for complex queries. If top score $\le 0.2$, skips evaluator and triggers corrective search. |
+| `SIMPLE_THRESHOLD` | `0.35` | Quality cutoff floor for simple queries. If top score $> 0.35$, bypasses evaluator and generates; otherwise retries. |
 | `KEEP_THRESHOLD` | `0.5` | Threshold for carrying over candidate chunks into subsequent retry pools. |
-| `MAX_RETRIES` | `1` | Maximum corrective search iterations before falling back to graceful synthesis. |
+| `MAX_RETRIES` | `2` | Maximum corrective search iterations before falling back to graceful synthesis. |
 | `TOP_K` | `5` | Base number of chunks retrieved per tool call. |
 | `RETRIEVE_MULTIPLIER`| `3` | Over-retrieval factor (retrieves `TOP_K * MULTIPLIER` candidates for reranker pool). |
 | `FINAL_CONTEXT_N` | `8` | Maximum number of top reranked chunks passed into generation prompt context. |
@@ -221,4 +222,4 @@ All runtime thresholds and parameters are defined in `src/rag/constants.py` and 
 | `TRIAGE_TIMEOUT_S` | `15.0` | Max timeout allowed for Tier 1 triage classification before failing to complex path. |
 | `MAX_SUBQUERIES` | `3` | Upper bound on sub-queries generated for complex multi-part questions. |
 | `LLM_MODEL` | `ministral-8b-latest` | Default primary LLM for triage, evaluation, and final generation. |
-| `RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Quantized local cross-encoder for semantic passage scoring. |
+| `RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Via Jina API Key (Tier 1 cascade) |

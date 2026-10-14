@@ -21,9 +21,10 @@ from src.rag.constants import (
 from src.rag.crag_llm import MockLLM
 from src.rag.reranker import (
     CascadeReranker,
-    CohereReranker,B
-    JinaAPIReranker,
+    CohereReranker,
+    JinaAPIReranker,   
     MISTRAL_RERANK_DEFAULT_MODEL,
+    MistralReranker,
     LLMReranker,
     MockReranker,
 )

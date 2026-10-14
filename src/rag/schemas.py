@@ -39,6 +39,7 @@ class TutorQuery(BaseModel):
     material_id: Optional[str] = None
     session_id: Optional[str] = None   # preferred
     memory_id: Optional[str] = None    # legacy fallback
+    topic: Optional[str] = None        # Optional topic name context
 
 
 class TutorResponse(BaseModel):
@@ -166,7 +167,7 @@ class RouterOutput(BaseModel):
     """
     Structured output from the Router node specifying sources to query and the search query.
     """
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     sources: list[Source] = Field(
         default_factory=lambda: ["supabase"],
@@ -188,6 +189,12 @@ class RouterOutput(BaseModel):
     @classmethod
     def populate_search_query_if_missing(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "properties" in data and isinstance(data["properties"], dict):
+                props = data["properties"]
+                if "search_query" in props:
+                    data["search_query"] = props["search_query"]
+                if "sources" in props and props["sources"]:
+                    data["sources"] = props["sources"]
             if "search_queries" in data and not data.get("search_query"):
                 sqs = data.get("search_queries")
                 if isinstance(sqs, list) and sqs:
@@ -198,13 +205,15 @@ class RouterOutput(BaseModel):
                 first_q = next(iter(tool_q.values()), None)
                 if first_q:
                     data["search_query"] = str(first_q).strip()
+            if "sources" not in data or data["sources"] is None:
+                data["sources"] = ["supabase"]
         return data
 
     @field_validator("search_query", mode="before")
     @classmethod
     def strip_search_query(cls, v: Any) -> str:
         if isinstance(v, str):
-            v = v.strip()
+            return v.strip()
         return v
 
     @field_validator("sources")
@@ -339,6 +348,8 @@ class GraphState(TypedDict, total=False):
     token_queue: Any                   # Optional asyncio.Queue for streaming response tokens
     tool_queries: dict[str, str]       # Optional per-source specialized search queries
     on_intent: Any                     # Optional callback invoked when intent is classified
+    topic: str | None                  # Optional current study topic name
+    chat_history: list[dict[str, Any]] # Previous conversation turns (last 8 messages)
 
 
 class FinalAnswer(BaseModel):

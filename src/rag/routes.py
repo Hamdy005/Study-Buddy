@@ -195,6 +195,18 @@ async def websocket_chat(websocket: WebSocket):
             except Exception:
                 pass
 
+        # Extract topic context if available
+        topic = data.get("topic") or data.get("topic_name")
+        if not topic and material_id:
+            try:
+                mat_obj = await asyncio.to_thread(get_material, material_id)
+                if mat_obj:
+                    topic = mat_obj.get("title") or mat_obj.get("topic")
+            except Exception:
+                pass
+
+        history_msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in (seed_msgs or [])][-8:]
+
         # Stream response using CRAG
         full_answer_parts = []
         is_material = bool(source_type in ("pdf", "url") and material_id)
@@ -204,6 +216,8 @@ async def websocket_chat(websocket: WebSocket):
                 material_id=material_id if is_material else None,
                 tracer=tracer,
                 on_intent=send_intent,
+                topic=topic,
+                chat_history=history_msgs,
             ):
                 full_answer_parts.append(token_chunk)
                 await websocket.send_text(token_chunk)
@@ -310,10 +324,23 @@ async def ask_tutor(
             if mat.get("user_id") != user_id:
                 raise HTTPException(403, "Access denied")
 
+        topic = getattr(body, "topic", None)
+        if not topic and body.material_id:
+            try:
+                mat_obj = await asyncio.to_thread(get_material, body.material_id)
+                if mat_obj:
+                    topic = mat_obj.get("title") or mat_obj.get("topic")
+            except Exception:
+                pass
+
+        history_msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in (seed_msgs or [])][-8:]
+
         final_ans = await run_crag(
             question=body.query,
             material_id=body.material_id if is_material else None,
             tracer=tracer,
+            topic=topic,
+            chat_history=history_msgs,
         )
         answer = final_ans.answer
         source = f"{body.source_type.upper()} (CRAG)" if is_material else "CRAG"

@@ -4,6 +4,7 @@
 config.env
 logs/
 .streamlit/
+src/rag/crag_graph.png
 
 # Database / SQLite temporary files
 *.db

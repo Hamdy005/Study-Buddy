@@ -30,6 +30,8 @@ async def run_crag(
     material_id: str | None = None,
     token_queue: asyncio.Queue | None = None,
     on_intent: Any | None = None,
+    topic: str | None = None,
+    chat_history: list[dict[str, Any]] | None = None,
 ) -> FinalAnswer:
     """
     Run the Corrective RAG pipeline for a given user question and return a FinalAnswer.
@@ -65,6 +67,8 @@ async def run_crag(
         "material_id": material_id,
         "token_queue": token_queue,
         "on_intent": on_intent,
+        "topic": topic,
+        "chat_history": chat_history or [],
     }
 
     config = {
@@ -107,6 +111,8 @@ async def run_crag_stream(
     tracer: ChatTracer | None = None,
     material_id: str | None = None,
     on_intent: Any | None = None,
+    topic: str | None = None,
+    chat_history: list[dict[str, Any]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream CRAG response tokens in real-time as they are generated.
@@ -125,6 +131,8 @@ async def run_crag_stream(
             material_id=material_id,
             token_queue=queue,
             on_intent=on_intent,
+            topic=topic,
+            chat_history=chat_history,
         )
     )
 

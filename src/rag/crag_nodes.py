@@ -31,10 +31,12 @@ from src.rag.constants import (
     TOOL_TIMEOUT_SECONDS,
     DEFAULT_TOOL_TIMEOUT_SIMPLE_S,
     DEFAULT_TOOL_TIMEOUT_COMPLEX_S,
+    DEFAULT_SIMPLE_THRESHOLD,
     TOPIC_HINTS,
     WIKI_TOP_K_RESULTS,
     ARXIV_TOP_K_RESULTS,
     DUCKDUCKGO_NUM_RESULTS,
+    format_chat_history,
     router_user_message,
     evaluator_user_message,
     generate_user_message,
@@ -117,7 +119,12 @@ def _chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list[s
 
 # ── Automatic LangChain Tool Selector Helper ───────────────────
 
-async def _run_langchain_tool_selector(query: str, material_id: str | None = None) -> tuple[list[Source], dict[str, str]]:
+async def _run_langchain_tool_selector(
+    query: str,
+    material_id: str | None = None,
+    topic: str | None = None,
+    chat_history: list[dict[str, Any]] | None = None,
+) -> tuple[list[Source], dict[str, str]]:
     """
     Automatic tool selector on pass 0 using LangChain bind_tools from src.rag.rag.
     Detects whether tools like wikipedia_search, web_search, arxiv_search, or supabase should be used.
@@ -139,6 +146,9 @@ async def _run_langchain_tool_selector(query: str, material_id: str | None = Non
         except Exception:
             router_llm = get_summary_llm()
 
+        topic_info = f"\nTopic is: {topic}\n" if topic else ""
+        history_info = f"\nRecent conversation context:\n{format_chat_history(chat_history, limit=8)}\n" if chat_history else ""
+
         llm_with_tools = router_llm.bind_tools(tools)
         messages = [
             SystemMessage(content=(
@@ -152,10 +162,12 @@ async def _run_langchain_tool_selector(query: str, material_id: str | None = Non
                 "2. Overlapping Multi-Tool Rule: If the query spans multiple categories or overlaps between domains "
                 "(e.g., cutting-edge academic theory applied in modern libraries, historical background overlapping with recent AI advances, "
                 "or research papers requiring broader web context), you CAN and SHOULD select multiple tools at once (e.g. arxiv_search + web_search).\n\n"
-                "3. Args: For each selected tool, generate a clean, concise, keyword-rich search query in args (no LaTeX, no punctuation, max 10 words).\n"
-                "4. Conversational / greetings: Emit 0 tool calls."
+                "3. Pronoun & Topic Resolution: If the query uses ambiguous pronouns (it, they, he, she, this, that) or asks to define/explain 'our topic', "
+                "resolve the subject using the provided topic and conversation history, and formulate tool queries for that concrete subject.\n\n"
+                "4. Args: For each selected tool, generate a clean, concise, keyword-rich search query in args (no LaTeX, no punctuation, max 10 words).\n"
+                "5. Conversational / greetings: Emit 0 tool calls."
             )),
-            HumanMessage(content=f'User query to research: "{query}"'),
+            HumanMessage(content=f'User query to research: "{query}"\n{topic_info}{history_info}'),
         ]
         resp = await llm_with_tools.ainvoke(messages)
         tool_calls = getattr(resp, "tool_calls", []) or []
@@ -315,11 +327,18 @@ def create_triage_node(
             }
 
         # Tier 1: LLM structured call
+        topic = state.get("topic")
+        chat_history = state.get("chat_history", [])
+        topic_context = f"<topic>Topic is: {topic}</topic>\n" if topic else ""
+        history_context = f"<conversation_history>\n{format_chat_history(chat_history, limit=8)}\n</conversation_history>\n"
         clean_q = re.sub(r"</?\s*user_query\s*>", "", original_q, flags=re.IGNORECASE).strip()
         prompt = (
             f"{TRIAGE_SYSTEM_PROMPT}\n\n"
+            f"{topic_context}"
+            f"{history_context}"
             f"<user_query>{clean_q}</user_query>\n\n"
-            f"Classify the user query. Respond with EXACTLY this format:\n"
+            f"Classify the user query. If the question uses ambiguous pronouns (it, they, he, she, this, that) or asks to define/explain our topic, resolve it using the topic name and conversation history (classify questions defining our topic as simple).\n"
+            f"Respond with EXACTLY this format:\n"
             f"intent: chitchat | unsafe | simple | complex\n"
             f"unsafe_type: none | gibberish | nsfw | political | religious\n"
             f"sub_questions: <none, or list 1 to 3 queries each on a new line prefixed with ->"
@@ -494,6 +513,8 @@ def create_init_state_node() -> Callable[[GraphState], Any]:
             "tracer": state.get("tracer"),
             "material_id": state.get("material_id"),
             "token_queue": state.get("token_queue"),
+            "topic": state.get("topic"),
+            "chat_history": state.get("chat_history", []),
         }
 
     return init_state
@@ -549,7 +570,11 @@ def create_router_node(
                 }
 
             # 2. Simple query: automatic tool calling
-            auto_sources, tool_queries = await _run_langchain_tool_selector(original_q, material_id=material_id)
+            topic = state.get("topic")
+            chat_history = state.get("chat_history", [])
+            auto_sources, tool_queries = await _run_langchain_tool_selector(
+                original_q, material_id=material_id, topic=topic, chat_history=chat_history
+            )
             if auto_sources:
                 latency_ms = (time.perf_counter() - t0) * 1000
                 if tracer:
@@ -596,24 +621,34 @@ def create_router_node(
         # On retry:
         retry_reason = "requery"
         intent = state.get("intent", "simple")
-        logger.info(f"[router] Retry pass {retries}: reason='requery' (missing='{missing}', intent='{intent}')")
+        topic = state.get("topic")
+        chat_history = state.get("chat_history", [])
+        topic_info = f"<topic>Topic is: {topic}</topic>\n" if topic else ""
+        history_info = f"<conversation_history>\n{format_chat_history(chat_history, limit=8)}\n</conversation_history>\n"
+        logger.info(f"[router] Retry pass {retries}: reason='requery' (missing='{missing}', intent='{intent}', topic='{topic}')")
         
-        # For simple query retry (score was <= low threshold):
+        # For simple query retry (score was <= simple threshold):
         if intent == "simple":
             # Must retry with ALL tools instead of auto select, with a keyword-style search query
             sources_to_use: list[Source] = ["supabase", "arxiv", "wikipedia", "web"]
+            simple_thresh = getattr(cfg, "SIMPLE_THRESHOLD", DEFAULT_SIMPLE_THRESHOLD)
             user_msg = (
                 f"<original_question>{original_q}</original_question>\n"
                 f"<previous_query>{state.get('search_query', original_q)}</previous_query>\n"
-                f"<missing>{missing or 'Re-rank score was below threshold; need targeted factual keywords.'}</missing>\n"
+                f"<missing>{missing or f'Re-rank score was below simple threshold ({simple_thresh}); need targeted factual keywords.'}</missing>\n"
                 f"<retry_number>{retries}</retry_number>"
             )
             prompt = (
                 f"{ROUTER_SYSTEM_PROMPT}\n\n"
+                f"{topic_info}"
+                f"{history_info}"
                 f"{user_msg}\n\n"
                 f"Rewrite this simple question into concise, keyword-style search terms optimized for arXiv and search engines "
                 f"(remove conversational phrases and question frames; extract 3 to 6 high-value search keywords). "
-                f"Output a valid RouterOutput JSON with 'search_query': 'keyword1 keyword2 ...'."
+                f"If the question refers to 'our topic', 'the topic', or uses ambiguous pronouns (it, they, he, she, this, that, its), "
+                f"resolve it using the topic name and conversation history to formulate search keywords for that concrete topic.\n"
+                f"Return EXACTLY in this format:\n"
+                f"SEARCH_QUERY: <keyword1 keyword2 ...>"
             )
         else:
             # Complex query: keep existing sources as before
@@ -626,8 +661,14 @@ def create_router_node(
             )
             prompt = (
                 f"{ROUTER_SYSTEM_PROMPT}\n\n"
+                f"{topic_info}"
+                f"{history_info}"
                 f"{user_msg}\n\n"
-                f"Output a valid RouterOutput JSON with 'search_query' targeting the missing information."
+                f"Write a focused search query targeting the missing information. "
+                f"If the question refers to 'our topic', 'the topic', or uses ambiguous pronouns, "
+                f"resolve it using the topic name and conversation history.\n"
+                f"Return EXACTLY in this format:\n"
+                f"SEARCH_QUERY: <search query keywords>"
             )
 
         new_search_query = original_q
@@ -635,6 +676,8 @@ def create_router_node(
             res = await llm_instance.ainvoke_structured(prompt, RouterOutput)
             if res and res.search_query.strip():
                 new_search_query = res.search_query.strip()
+                if len(new_search_query) > 300:
+                    new_search_query = new_search_query[:300].rstrip()
         except Exception as exc:
             logger.warning(
                 f"[router] Router query-rewrite LLM failed ({exc}). Using missing/original fallback."
@@ -645,6 +688,9 @@ def create_router_node(
                 new_search_query = " ".join(words[:6]) if words else original_q
             elif missing and len(missing) >= 3:
                 new_search_query = missing[:300].strip()
+
+        if len(new_search_query) > 300:
+            new_search_query = new_search_query[:300].rstrip()
 
         latency_ms = (time.perf_counter() - t0) * 1000
         tool_queries = {s: new_search_query for s in sources_to_use}
@@ -1091,9 +1137,10 @@ def score_gate(state: GraphState, settings: Settings | None = None) -> str:
 
     if intent == "simple":
         # Simple query path: depend on re-rank score only and bypass evaluator node.
-        # - Above low threshold (between low & high, or above high) -> generate
-        # - Below or equal to low threshold -> retry_check (retries with all tools & keyword query)
-        if top_rounded > cfg.LOW_THRESHOLD:
+        # - Above simple threshold (default 0.35) -> generate
+        # - Below simple threshold -> retry_check (retries with all tools & keyword query)
+        simple_thresh = getattr(cfg, "SIMPLE_THRESHOLD", DEFAULT_SIMPLE_THRESHOLD)
+        if top_rounded > simple_thresh:
             decision = "generate"
         else:
             decision = "retry_check"
