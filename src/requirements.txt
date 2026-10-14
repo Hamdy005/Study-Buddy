@@ -104,6 +104,9 @@ inflect==7.5.0
 pandas==2.2.3
 ruamel.yaml==0.19.1
 wrapt==2.5.0
+datasets>=2.14.4
+packaging>=23.2
+texterrors>=0.5.1
 
 # ── Logging ─────────────────────────────────────────────
 loguru==0.7.3
