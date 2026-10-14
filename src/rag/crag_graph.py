@@ -30,7 +30,7 @@ from src.rag.crag_nodes import (
     score_gate,
     triage_gate,
 )
-from src.rag.reranker import Reranker, JinaReranker
+from src.rag.reranker import Reranker, JinaReranker, CascadeReranker
 from src.rag.schemas import GraphState, Source
 from src.rag.tools import RetrieverFn
 
@@ -46,7 +46,7 @@ def build_graph(
     """
     cfg = settings or default_settings
     llm_instance = llm or LangChainLLM()
-    reranker_instance = reranker or JinaReranker(model_id=cfg.RERANKER_MODEL)
+    reranker_instance = reranker or CascadeReranker(settings=cfg, llm=llm_instance)
 
     workflow = StateGraph(GraphState)
 
@@ -64,7 +64,7 @@ def build_graph(
     workflow.add_node("retrieve", create_retrieve_node(tools=tools, settings=cfg))
     workflow.add_node("normalize", create_normalize_node())
     workflow.add_node("merge_pool", create_merge_pool_node(settings=cfg))
-    workflow.add_node("rerank", create_rerank_node(reranker=reranker_instance, settings=cfg))
+    workflow.add_node("rerank", create_rerank_node(reranker=reranker_instance, settings=cfg, llm=llm_instance))
     workflow.add_node("evaluator", create_evaluator_node(llm=llm_instance))
     workflow.add_node("retry_check", create_retry_check_node(settings=cfg))
     workflow.add_node("generate", create_generate_node(llm=llm_instance))

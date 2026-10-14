@@ -41,7 +41,7 @@ from src.rag.constants import (
     fallback_user_message,
 )
 from src.rag.crag_llm import LLM, LangChainLLM
-from src.rag.reranker import Reranker, JinaReranker
+from src.rag.reranker import Reranker, JinaReranker, CascadeReranker
 from src.rag.schemas import (
     Chunk,
     EvaluatorOutput,
@@ -928,10 +928,11 @@ def create_merge_pool_node(settings: Settings | None = None) -> Callable[[GraphS
 def create_rerank_node(
     reranker: Reranker | None = None,
     settings: Settings | None = None,
+    llm: LLM | None = None,
 ) -> Callable[[GraphState], Any]:
     """Node 6: rerank."""
     cfg = settings or default_settings
-    reranker_instance = reranker or JinaReranker(model_id=cfg.RERANKER_MODEL)
+    reranker_instance = reranker or CascadeReranker(settings=cfg, llm=llm)
 
     async def rerank(state: GraphState) -> dict[str, Any]:
         t0 = time.perf_counter()
@@ -948,7 +949,7 @@ def create_rerank_node(
                     top_k=cfg.FINAL_CONTEXT_N,
                     latency_ms=latency_ms,
                     scores=[],
-                    model=cfg.RERANKER_MODEL,
+                    model=getattr(reranker_instance, "last_tier", cfg.RERANKER_MODEL),
                 )
                 tracer.log_node(
                     name="node/rerank",
@@ -968,18 +969,25 @@ def create_rerank_node(
             else:
                 unscored_chunks.append(c)
 
-        max_candidates = max(12, cfg.FINAL_CONTEXT_N * 3)
+        multiplier = getattr(cfg, "RETRIEVE_MULTIPLIER", 3.0)
+        max_candidates = max(12, int(round(cfg.FINAL_CONTEXT_N * multiplier)))
         to_score = unscored_chunks[:max_candidates]
         leftover_unscored = unscored_chunks[max_candidates:]
 
         if to_score:
             texts_to_score = [c.text[:MAX_CHUNK_CHARS] for c in to_score]
             try:
-                scores = await asyncio.to_thread(
-                    reranker_instance.score,
-                    original_q,
-                    texts_to_score,
-                )
+                if hasattr(reranker_instance, "score_async"):
+                    scores = await reranker_instance.score_async(
+                        original_q,
+                        texts_to_score,
+                    )
+                else:
+                    scores = await asyncio.to_thread(
+                        reranker_instance.score,
+                        original_q,
+                        texts_to_score,
+                    )
             except Exception as exc:
                 logger.warning(
                     f"[rerank] Reranker failed: {exc}. Falling back to retrieval order with default scores."
@@ -1035,6 +1043,8 @@ def create_rerank_node(
         top_score = ranked[0].score if ranked and ranked[0].score is not None else 0.0
         latency_ms = (time.perf_counter() - t0) * 1000
 
+        used_model = getattr(reranker_instance, "last_tier", cfg.RERANKER_MODEL)
+
         if tracer:
             all_scores = [c.score for c in scored_pool if c.score is not None]
             tracer.log_reranker(
@@ -1043,7 +1053,7 @@ def create_rerank_node(
                 top_k=cfg.FINAL_CONTEXT_N,
                 latency_ms=latency_ms,
                 scores=all_scores,
-                model=cfg.RERANKER_MODEL,
+                model=used_model,
             )
             tracer.log_node(
                 name="node/rerank",

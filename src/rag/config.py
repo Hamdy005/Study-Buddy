@@ -34,14 +34,14 @@ class Settings(BaseSettings):
     """
     model_config = SettingsConfigDict(
         env_prefix="",
-        env_file=".env",
+        env_file=("config.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     MAX_RETRIES: int = Field(default=DEFAULT_MAX_RETRIES, ge=0, le=2)
     TOP_K: int = Field(default=DEFAULT_TOP_K, ge=1, le=50)
-    RETRIEVE_MULTIPLIER: int = Field(default=DEFAULT_RETRIEVE_MULTIPLIER, ge=1, le=6)
+    RETRIEVE_MULTIPLIER: float = Field(default=float(DEFAULT_RETRIEVE_MULTIPLIER), ge=1.0, le=6.0)
     RERANK_WINDOW: int = Field(default=DEFAULT_RERANK_WINDOW)
     FINAL_CONTEXT_N: int = Field(default=DEFAULT_FINAL_CONTEXT_N, ge=1, le=20)
     POOL_MAX: int = Field(default=DEFAULT_POOL_MAX, ge=10, le=100)
@@ -61,9 +61,15 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     MISTRAL_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
+    JINA_API_KEY: str | None = None
+    COHERE_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
     LLM_MODEL: str = DEFAULT_LLM_MODEL
-    RERANKER_MODEL: str = RERANKER_QUANTIZED_MODEL
+    RERANKER_MODEL: str = "jina-reranker-v2-base-multilingual"
+    JINA_RERANK_MODEL: str = "jina-reranker-v2-base-multilingual"
+    COHERE_RERANK_MODEL: str = "rerank-v3.5"
+    MISTRAL_RERANK_MODEL: str = "ministral-8b-latest"
 
     @field_validator("RERANK_WINDOW")
     @classmethod
@@ -96,3 +102,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+default_settings = settings
