@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     git \
     build-essential \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
