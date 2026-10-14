@@ -461,7 +461,7 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </nav>
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -536,22 +536,24 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
         </div>
 
         <Tabs value={resolvedTab} onValueChange={handleTabChange} className="mt-6">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="summary" className="gap-2 hover:bg-primary/5 transition-colors">
-              <Sparkles className="h-4 w-4" />
-              <span className="hidden sm:inline">Summary</span>
-            </TabsTrigger>
-            <TabsTrigger value="chat" className="gap-2 hover:bg-primary/5 transition-colors">
-              <MessageSquare className="h-4 w-4" />
-              <span className="hidden sm:inline">Chat</span>
-            </TabsTrigger>
-            <TabsTrigger value="quiz" className="gap-2 hover:bg-primary/5 transition-colors">
-              <Brain className="h-4 w-4" />
-              <span className="hidden sm:inline">Quiz</span>
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex justify-center mb-6">
+            <TabsList className="grid w-full max-w-md grid-cols-3 h-11 p-1 bg-muted/60 dark:bg-card/70 backdrop-blur-sm border border-border/80 dark:border-border/60 rounded-xl shadow-xs">
+              <TabsTrigger value="summary" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
+                <Sparkles className="h-4 w-4" />
+                <span className="hidden sm:inline">Summary</span>
+              </TabsTrigger>
+              <TabsTrigger value="chat" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
+                <MessageSquare className="h-4 w-4" />
+                <span className="hidden sm:inline">Chat</span>
+              </TabsTrigger>
+              <TabsTrigger value="quiz" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
+                <Brain className="h-4 w-4" />
+                <span className="hidden sm:inline">Quiz</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
-          <TabsContent value="summary" forceMount className="mt-6">
+          <TabsContent value="summary" forceMount className="mt-2">
             <SummaryTab
               materialId={id}
               sourceType={material.source_type}
@@ -1669,15 +1671,15 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   }
 
   return (
-    <div className="h-[750px] flex flex-col overflow-hidden border border-border/50 dark:border-white/[0.06] shadow-sm bg-card rounded-xl">
+    <div className="h-[760px] md:h-[780px] flex flex-col overflow-hidden border border-border/80 dark:border-border/60 shadow-sm bg-card rounded-2xl">
       {/* Header */}
-      <div className="px-3 md:px-4 border-b border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] h-20 flex items-center justify-between shrink-0 group">
+      <div className="px-3 md:px-5 border-b border-border/80 dark:border-border/60 bg-muted/40 dark:bg-card/90 backdrop-blur-sm h-16 md:h-18 flex items-center justify-between shrink-0 group">
         <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 mr-2">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="h-8 w-8 p-0 flex flex-shrink-0 hover:bg-muted"
+            className="h-9 w-9 p-0 flex flex-shrink-0 hover:bg-muted rounded-lg"
             title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
           >
             {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
@@ -1694,7 +1696,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
           <div className="flex items-center gap-1 min-w-0 flex-1">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-1 min-w-0 hover:bg-muted/60 px-2 py-1 rounded-lg transition-colors text-left max-w-full group/title">
+                <button className="flex items-center gap-1 min-w-0 hover:bg-muted/60 px-2 py-1.5 rounded-lg transition-colors text-left max-w-full group/title">
                   <span className="text-sm md:text-base font-semibold truncate text-foreground">
                     {(sessions.find(s => s.id === currentSessionId)?.title || 'Untitled Chat').slice(0, 50)}
                   </span>
@@ -1746,14 +1748,14 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                     const s = sessions.find(s => s.id === currentSessionId)
                     if (s) { setRenamingSessionId(s.id); setRenameSessionInput(s.title) }
                   }}
-                  className="p-1 rounded-lg hover:bg-muted transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                  className="p-1.5 rounded-lg hover:bg-muted transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   title="Rename session"
                 >
                   <Pencil className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
                 <button
                   onClick={(e) => deleteSession(currentSessionId, e as any)}
-                  className="p-1 rounded-lg hover:bg-destructive/10 transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                  className="p-1.5 rounded-lg hover:bg-destructive/10 transition-colors flex-shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   title="Delete session"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
@@ -1764,8 +1766,8 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          <Button variant="ghost" size="sm" onClick={handleExportPDF} disabled={messages.length === 0} className="h-9 w-9 p-0 hover:bg-muted">
-            <Printer className="h-5 w-5" />
+          <Button variant="ghost" size="sm" onClick={handleExportPDF} disabled={messages.length === 0} className="h-9 w-9 p-0 hover:bg-muted rounded-lg" title="Export as PDF">
+            <Printer className="h-4.5 w-4.5" />
           </Button>
         </div>
       </div>
@@ -1782,8 +1784,8 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
 
         {/* Sidebar (Desktop Side Panel + Mobile Drawer) */}
         {sidebarOpen && (
-          <div className="absolute md:relative inset-y-0 left-0 z-30 w-72 md:w-60 flex flex-col border-r border-border/40 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111113] min-h-0 shadow-2xl md:shadow-none">
-            <div className="p-4 border-b flex items-center justify-between gap-2">
+          <div className="absolute md:relative inset-y-0 left-0 z-30 w-72 md:w-64 flex flex-col border-r border-border/80 dark:border-border/60 bg-muted/25 dark:bg-card/50 min-h-0 shadow-2xl md:shadow-none">
+            <div className="p-4 border-b border-border/80 dark:border-border/60 flex items-center justify-between gap-2">
               <Button
                 onClick={() => {
                   createNewSession()
@@ -1791,7 +1793,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                     setSidebarOpen(false)
                   }
                 }}
-                className="w-full justify-start gap-2 bg-background hover:bg-muted transition-colors"
+                className="w-full justify-start gap-2 bg-background hover:bg-muted transition-colors shadow-xs"
                 variant="outline"
                 disabled={isCreatingSession}
               >
@@ -1824,7 +1826,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                         }
                       }
                     }}
-                    className={`group flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all ${currentSessionId === s.id ? 'bg-primary/10 border-primary/20 border shadow-sm' : 'hover:bg-muted border border-transparent'
+                    className={`group flex items-start justify-between p-2.5 rounded-xl cursor-pointer transition-all ${currentSessionId === s.id ? 'bg-primary/10 border-primary/25 border shadow-xs text-primary' : 'hover:bg-muted/70 dark:hover:bg-muted/30 border border-transparent text-foreground'
                       }`}
                   >
                     {renamingSessionId === s.id ? (
@@ -1883,10 +1885,10 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         )}
 
         {/* Chat Content */}
-        <div className="flex-1 flex flex-col min-w-0 relative">
+        <div className="flex-1 flex flex-col min-w-0 relative bg-background/50 dark:bg-[#0f1014]/70">
           <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6"
+            className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8"
             style={{ scrollbarGutter: 'stable' }}
           >
             {!currentSessionId ? (
@@ -1913,7 +1915,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                 </p>
               </div>
             ) : (
-              <div className="space-y-6 max-w-3xl mx-auto w-full">
+              <div className="space-y-6 max-w-3xl lg:max-w-4xl mx-auto w-full">
                 {messages.map((m, i) => {
                   const isLastMessage = i === messages.length - 1
                   const isStreamingActive = isLastMessage && m.role === 'assistant' && isStreaming
@@ -1926,12 +1928,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                       className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
                       ref={m.role === 'user' ? lastUserMessageRef : undefined}
                     >
-                      <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${m.role === 'user'
-                          ? 'bg-primary text-primary-foreground rounded-tr-none'
-                          : 'bg-card border border-border/50 text-foreground rounded-tl-none'
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-3 md:px-5 md:py-3.5 shadow-xs ${m.role === 'user'
+                          ? 'bg-primary text-primary-foreground rounded-tr-none shadow-sm'
+                          : 'bg-card dark:bg-[#18191e] border border-border/80 dark:border-border/60 text-foreground rounded-tl-none shadow-xs'
                         }`}>
                         {m.role === 'user' ? (
-                          <p dir="auto" className="text-[15.25px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                          <p dir="auto" className="text-[15.5px] md:text-[16px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
                         ) : !m.content && isStreamingActive ? (
                           <div className="flex items-center gap-2.5 py-1.5 px-1">
                             <div className="flex items-center gap-1.5">
@@ -1946,7 +1948,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                             )}
                           </div>
                         ) : (
-                          <div className="text-[16.25px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
+                          <div className="text-[16px] md:text-[16.5px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
                             {renderMarkdown(m.content)}
                             {isStreamingActive && (
                               <span className="inline-flex items-center gap-1 ml-2 align-middle">
@@ -1963,7 +1965,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                 })}
                 {isLoading && !isStreaming && (
                   <div className="flex justify-start">
-                    <div className="bg-card border border-border/50 rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2.5">
+                    <div className="bg-card dark:bg-[#18191e] border border-border/80 dark:border-border/60 rounded-2xl rounded-tl-none px-4 py-3 md:px-5 md:py-3.5 flex items-center gap-2.5 shadow-xs">
                       <div className="flex items-center gap-1.5 py-1 px-0.5">
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
@@ -1982,13 +1984,13 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
           </div>
 
           {/* Input */}
-          <div className="bg-transparent px-4 pb-4 md:px-6 md:pb-6 pt-0 shrink-0">
+          <div className="bg-transparent px-4 pb-4 md:px-6 md:pb-6 pt-1 shrink-0">
             <form
               onSubmit={(e) => { e.preventDefault(); sendMessage() }}
-              className="max-w-3xl mx-auto"
+              className="max-w-3xl lg:max-w-4xl mx-auto"
             >
               {/* Unified single container */}
-              <div className="rounded-2xl border border-border/50 dark:border-white/[0.09] bg-[#f4f4f5]/70 dark:bg-[#2a2a2e] p-2 shadow-sm transition-all duration-150 focus-within:border-border/70 focus-within:bg-[#f0f0f1] dark:focus-within:border-white/[0.14] dark:focus-within:bg-[#303036]">
+              <div className="rounded-2xl border border-border/80 dark:border-border/60 bg-card/95 dark:bg-[#18191e] p-2.5 md:p-3 shadow-sm transition-all duration-200 focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20 focus-within:bg-card dark:focus-within:bg-[#1c1d23] dark:focus-within:border-primary/50">
                 <Textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -2001,7 +2003,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                   }
                   dir={asrLang === 'ar' ? 'rtl' : 'ltr'}
                   disabled={!currentSessionId}
-                  className="w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none focus:ring-0 min-h-[50px] max-h-[120px] resize-none py-1.5 px-2.5 text-sm placeholder:text-muted-foreground/60 shadow-none"
+                  className="w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none focus:ring-0 min-h-[64px] max-h-[160px] resize-none py-1.5 px-2 md:py-2 md:px-3 text-base md:text-[16.5px] leading-relaxed placeholder:text-muted-foreground/60 shadow-none text-foreground"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
@@ -2011,17 +2013,17 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                 />
 
                 {/* Action bar — sits inline inside the container */}
-                <div className="flex items-center justify-between pt-1 px-1 bg-transparent">
+                <div className="flex items-center justify-between pt-1.5 px-1 bg-transparent">
                   {/* Left: EN | AR segmented language toggle */}
-                  <div className="flex items-center gap-1 bg-background/60 dark:bg-background/40 border border-border/50 rounded-lg p-0.5">
+                  <div className="flex items-center gap-1 bg-muted/60 dark:bg-muted/30 border border-border/70 dark:border-border/60 rounded-lg p-0.5">
                     <button
                       type="button"
                       id="asr-lang-en"
                       onClick={() => setAsrLang('en')}
                       disabled={isRecording || isTranscribing}
-                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold transition-all ${
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
                         asrLang === 'en'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          ? 'bg-primary text-primary-foreground shadow-xs'
                           : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
@@ -2032,9 +2034,9 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                       id="asr-lang-ar"
                       onClick={() => setAsrLang('ar')}
                       disabled={isRecording || isTranscribing}
-                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold transition-all ${
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
                         asrLang === 'ar'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          ? 'bg-primary text-primary-foreground shadow-xs'
                           : 'text-muted-foreground hover:text-foreground'
                       }`}
                     >
@@ -2053,7 +2055,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                           mediaRecorderRef.current?.stop()
                           setIsRecording(false)
                         }}
-                        className="h-8 w-8 rounded-lg flex items-center justify-center transition-all hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                        className="h-9 w-9 rounded-lg flex items-center justify-center transition-all hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
                         title="Discard recording"
                       >
                         <X className="h-4 w-4" />
@@ -2125,7 +2127,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                           }
                         }
                       }}
-                      className={`relative h-8 w-8 rounded-lg flex items-center justify-center transition-all ${
+                      className={`relative h-9 w-9 rounded-lg flex items-center justify-center transition-all ${
                         isTranscribing
                           ? 'bg-muted text-muted-foreground cursor-wait'
                           : isRecording
@@ -2145,7 +2147,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                           <MicOff className="h-4 w-4 relative" />
                         </>
                       ) : (
-                        <Mic className="h-4 w-4" />
+                        <Mic className="h-4.5 w-4.5" />
                       )}
                     </button>
 
@@ -2155,12 +2157,12 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                       id="chat-send-button"
                       disabled={isLoading || input.trim().length < 2 || !currentSessionId}
                       size="icon"
-                      className="h-8 w-8 rounded-lg shadow-sm"
+                      className="h-9 w-9 rounded-lg shadow-xs"
                     >
                       {isLoading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
-                        <Send className="h-3.5 w-3.5" />
+                        <Send className="h-4 w-4" />
                       )}
                     </Button>
                   </div>
