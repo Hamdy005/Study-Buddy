@@ -100,23 +100,23 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Reranker failed to load or warmup at startup: {e}")
 
     # Eagerly load ASR models so warmup runs at startup, not on first request
-    # try:
-    #     from src.asr.models import get_audio_model_en
-    #     get_audio_model_en()
-    # except Exception as e:
-    #     logger.warning(f"English ASR model failed to load: {e}")
+    try:
+        from src.asr.models import get_audio_model_en
+        get_audio_model_en()
+    except Exception as e:
+        logger.warning(f"English ASR model failed to load: {e}")
 
-    # try:
-    #     from src.asr.models import get_audio_model_ar
-    #     get_audio_model_ar()
-    # except Exception as e:
-    #     logger.warning(f"Arabic ASR model failed to load: {e}")
+    try:
+        from src.asr.models import get_audio_model_ar
+        get_audio_model_ar()
+    except Exception as e:
+        logger.warning(f"Arabic ASR model failed to load: {e}")
 
-    # from src.rag.batch_workers import start_workers
-    # start_workers()
+    from src.rag.batch_workers import start_workers
+    start_workers()
 
-    # from src.asr.batch_workers import start_asr_workers
-    # start_asr_workers()
+    from src.asr.batch_workers import start_asr_workers
+    start_asr_workers()
 
     yield
 
