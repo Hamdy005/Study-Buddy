@@ -1,0 +1,128 @@
+{
+  "total_evaluated_queries": 32,
+  "overall_averages": {
+    "context_precision": 0.8612,
+    "context_recall": 0.7572,
+    "faithfulness": 0.7741,
+    "answer_relevancy": 0.9488,
+    "answer_correctness": 0.5923
+  },
+  "by_actual_pipeline_path": {
+    "strict_rag": {
+      "count": 27,
+      "metrics": {
+        "context_precision": 0.8911,
+        "context_recall": 0.807,
+        "faithfulness": 0.7741,
+        "answer_relevancy": 0.9513,
+        "answer_correctness": 0.6156
+      }
+    },
+    "hybrid_fallback": {
+      "count": 5,
+      "metrics": {
+        "context_precision": 0.7,
+        "context_recall": 0.4881,
+        "faithfulness": null,
+        "answer_relevancy": 0.9357,
+        "answer_correctness": 0.4668
+      }
+    }
+  },
+  "by_expected_pipeline_path": {
+    "strict_rag": {
+      "count": 26,
+      "metrics": {
+        "context_precision": 0.8581,
+        "context_recall": 0.7816,
+        "faithfulness": 0.7942,
+        "answer_relevancy": 0.9532,
+        "answer_correctness": 0.6079
+      }
+    },
+    "hybrid_fallback": {
+      "count": 6,
+      "metrics": {
+        "context_precision": 0.875,
+        "context_recall": 0.6512,
+        "faithfulness": 0.6585,
+        "answer_relevancy": 0.9298,
+        "answer_correctness": 0.5248
+      }
+    }
+  },
+  "by_material": {
+    "OS - Lecture 7": {
+      "count": 10,
+      "metrics": {
+        "context_precision": 0.8227,
+        "context_recall": 0.7931,
+        "faithfulness": 0.7072,
+        "answer_relevancy": 0.934,
+        "answer_correctness": 0.6122
+      }
+    },
+    "Python Celery": {
+      "count": 10,
+      "metrics": {
+        "context_precision": 0.925,
+        "context_recall": 0.7615,
+        "faithfulness": 0.6717,
+        "answer_relevancy": 0.9593,
+        "answer_correctness": 0.5608
+      }
+    },
+    "Reinforcment Learning": {
+      "count": 12,
+      "metrics": {
+        "context_precision": 0.8403,
+        "context_recall": 0.7236,
+        "faithfulness": 0.9434,
+        "answer_relevancy": 0.9525,
+        "answer_correctness": 0.602
+      }
+    }
+  },
+  "by_question_type": {
+    "factoid": {
+      "count": 20,
+      "metrics": {
+        "context_precision": 0.8488,
+        "context_recall": 0.7361,
+        "faithfulness": 0.7929,
+        "answer_relevancy": 0.9483,
+        "answer_correctness": 0.5966
+      }
+    },
+    "hybrid_gap": {
+      "count": 4,
+      "metrics": {
+        "context_precision": 0.875,
+        "context_recall": 0.4768,
+        "faithfulness": 0.6919,
+        "answer_relevancy": 0.906,
+        "answer_correctness": 0.5321
+      }
+    },
+    "multi_hop": {
+      "count": 3,
+      "metrics": {
+        "context_precision": 1.0,
+        "context_recall": 1.0,
+        "faithfulness": 0.6402,
+        "answer_relevancy": 0.9718,
+        "answer_correctness": 0.6168
+      }
+    },
+    "reasoning": {
+      "count": 5,
+      "metrics": {
+        "context_precision": 0.8167,
+        "context_recall": 0.92,
+        "faithfulness": 0.8233,
+        "answer_relevancy": 0.9717,
+        "answer_correctness": 0.6087
+      }
+    }
+  }
+}

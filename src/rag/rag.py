@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import uuid
 import time
@@ -292,41 +293,70 @@ def _configure_mistral_ssl() -> None:
         pass
 
 
-def get_llm():
-    """RAG Chatbot LLM — strictly uses Mistral AI ministral-8b-latest."""
+def get_mistral_model(
+    model: str = "ministral-8b-latest",
+    temperature: float = 0.3,
+    max_tokens: int = 3500,
+    timeout: int = 120,
+    max_retries: int = 5,
+):
+    """
+    Constructs a chat model for the requested Mistral model tier via direct Mistral AI:
+      - ministral-8b: Fast classification / triage / routing calls.
+      - mistral-medium / Mistral Medium 3.5: Tool selector, Evaluator, and Fallback.
+      - mistral-large / Mistral Large 4: High-quality Generator.
+    """
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not mistral_key:
-        raise ValueError("MISTRAL_API_KEY is not configured in config.env. Required for Ministral 8B RAG chatbot.")
+        raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
+
+    normalized = model.lower().strip()
+    if "14b" in normalized:
+        direct_model = "ministral-14b-latest"
+    elif "ministral" in normalized or "8b" in normalized:
+        direct_model = "ministral-8b-latest"
+    elif "medium" in normalized:
+        direct_model = "mistral-medium-latest"
+    elif "large" in normalized:
+        direct_model = "mistral-large-latest"
+    else:
+        direct_model = model
+
     _configure_mistral_ssl()
-    logger.info("Initializing RAG Chatbot LLM with Mistral AI model: ministral-8b-latest")
+
     return ChatMistralAI(
-        model="ministral-8b-latest",
+        model=direct_model,
         api_key=mistral_key,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+
+
+def get_llm(model: str = "ministral-8b-latest"):
+    """RAG Chatbot LLM — defaults to Ministral 8B, configurable for other tiers."""
+    logger.info(f"Initializing RAG Chatbot LLM with model: {model}")
+    return get_mistral_model(
+        model=model,
         temperature=0.3,
         max_tokens=3500,
         timeout=120,
     )
 
 
-def get_rag_router_llm():
-    """RAG-chatbot agentic tool-routing LLM — Mistral AI ministral-8b-latest.
+def get_rag_router_llm(model: str = "mistral-medium-latest"):
+    """RAG-chatbot agentic tool-routing LLM — Mistral Medium 3.5.
 
-    Uses Ministral 8B as the web-search router inside the RAG chatbot pipeline.
-    Ministral supports .bind_tools() natively so no Gemini is needed for this step.
-    Kept separate from get_llm() so temperature and token limits can be tuned independently.
+    Uses Mistral Medium 3.5 for reasoning and high-fidelity tool selection.
     """
-    mistral_key = os.environ.get("MISTRAL_API_KEY")
-    if not mistral_key:
-        raise ValueError("MISTRAL_API_KEY is not configured in config.env.")
-    _configure_mistral_ssl()
-    logger.info("Initializing RAG router LLM with Mistral AI model: ministral-8b-latest")
-    return ChatMistralAI(
-        model="ministral-8b-latest",
-        api_key=mistral_key,
+    logger.info(f"Initializing RAG router tool-selector LLM with model: {model}")
+    return get_mistral_model(
+        model=model,
         temperature=0.1,   # Lower temperature for deterministic tool selection
         max_tokens=512,    # Router only needs to emit tool_calls, not long text
         timeout=30,
-        max_retries=3,
+        max_retries=2,
     )
 
 
@@ -436,69 +466,167 @@ def _clean_llm_response(content) -> str:
 
 # ── Web Search Helpers ────────────────────────────────
 
+# ── Web Search Helpers ────────────────────────────────
+
+_LAST_DDG_SEARCH_TIME: float = 0.0
+_DDG_MIN_INTERVAL: float = 0.25  # 250ms minimum gap between rapid web searches to prevent OS error 111
+
+
+def sanitize_web_query(query: str, max_words: int = 12) -> str:
+    """Strips Boolean quotes, shell operators, and extra prefixes to prevent DDGS exceptions."""
+    if not query or not query.strip():
+        return ""
+    q = query.strip()
+    # Strip LLM query labels
+    q = re.sub(r"^(SEARCH_QUERY|Query|Search):\s*", "", q, flags=re.IGNORECASE)
+    # Strip markdown / prompt / shell redirect characters from beginning
+    q = re.sub(r"^[>\-\*\#\s]+", "", q)
+    # Strip quotes (single/double/backticks) so DDG does not force strict quoted phrase searches
+    q = re.sub(r"[\"'\`]", " ", q)
+    # Strip boolean operators that trigger 0 results in DDGS
+    q = re.sub(r"\b(AND|OR|NOT)\b", " ", q)
+    # Strip search filter operators
+    q = re.sub(r"\b(site|filetype|inurl):\S+", " ", q)
+    # Strip punctuation and special characters
+    q = re.sub(r"[<>{}\[\]\(\)\^~*+!?;:,|/\\]", " ", q)
+    # Normalize whitespace
+    q = re.sub(r"\s+", " ", q).strip()
+    words = q.split()
+    if len(words) > max_words:
+        q = " ".join(words[:max_words])
+    return q or query.strip()[:60]
+
+
+def _apply_ddg_rate_limit() -> None:
+    """Enforces a tiny gap between rapid successive web searches to avoid OS connection refusal (error 111)."""
+    global _LAST_DDG_SEARCH_TIME
+    now = time.time()
+    elapsed = now - _LAST_DDG_SEARCH_TIME
+    if elapsed < _DDG_MIN_INTERVAL:
+        time.sleep(_DDG_MIN_INTERVAL - elapsed)
+    _LAST_DDG_SEARCH_TIME = time.time()
+
+
 def direct_ddg_search(query: str, max_chars: int = DUCKDUCKGO_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run a web search for *query* using DDGS default engine.
-    Returns an empty string if the search fails or returns no results.
+    Sanitizes query, enforces inter-request delay to prevent connection refusal,
+    and falls back to LangChain DuckDuckGoSearchResults.
     """
+    if not query or not query.strip():
+        return ""
+
+    clean_query = sanitize_web_query(query)
+    if not clean_query:
+        return ""
+
+    _apply_ddg_rate_limit()
+
+    # 1. Try DDGS text search
     try:
         ddgs = DDGS()
-        results = list(ddgs.text(query, max_results=DUCKDUCKGO_NUM_RESULTS))
-        if not results:
-            logger.warning(f"direct_ddg_search: 0 results for '{query[:60]}'")
-            return ""
-        snippets = [
-            f"{r.get('title', '')}: {r.get('body', '')}"
-            for r in results
-            if r.get('body')
-        ]
-        combined = "\n".join(snippets)
-        if not combined.strip():
-            return ""
-        logger.info(f"direct_ddg_search: {len(results)} results chars={len(combined)}")
-        return combined[:max_chars]
+        results = list(ddgs.text(clean_query, max_results=DUCKDUCKGO_NUM_RESULTS))
+        if results:
+            snippets = [
+                f"{r.get('title', '')}: {r.get('body', '')}"
+                for r in results
+                if r.get('body')
+            ]
+            combined = "\n".join(snippets).strip()
+            if combined:
+                # Sanitize any broken wt.wikipedia.org subdomains in snippets
+                combined = re.sub(r"https?://wt\.wikipedia\.org", "https://en.wikipedia.org", combined)
+                logger.info(f"direct_ddg_search: {len(results)} results chars={len(combined)}")
+                return combined[:max_chars]
+        logger.debug(f"direct_ddg_search: DDGS returned 0 results for '{clean_query[:60]}'")
     except Exception as e:
-        logger.warning(f"direct_ddg_search failed: {type(e).__name__}: {e}")
-        return ""
+        logger.debug(f"direct_ddg_search DDGS exception: {type(e).__name__}: {e}")
+        # Add backoff if connection was refused or rate-limited
+        if "111" in str(e) or "Connection refused" in str(e) or "429" in str(e):
+            time.sleep(0.5)
+
+    # 2. Resilient fallback to LangChain DuckDuckGoSearchResults
+    try:
+        from langchain_community.tools import DuckDuckGoSearchResults
+        tool = DuckDuckGoSearchResults(max_results=DUCKDUCKGO_NUM_RESULTS)
+        res = tool.run(clean_query)
+        if isinstance(res, str) and res.strip() and "No good DuckDuckGo Search Result was found" not in res:
+            res = re.sub(r"https?://wt\.wikipedia\.org", "https://en.wikipedia.org", res)
+            logger.info(f"direct_ddg_search (fallback): chars={len(res)}")
+            return res.strip()[:max_chars]
+    except Exception as exc:
+        logger.debug(f"direct_ddg_search fallback failed: {exc}")
+
+    return ""
 
 
 def direct_wiki_search(query: str, max_chars: int = WIKI_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run a targeted Wikipedia search for *query*.
-    Falls back to DDG search if direct Wikipedia API fails.
+    Ensures compliant User-Agent and strict timeout.
+    Falls back to web search if direct Wikipedia API fails.
     """
+    if not query or not query.strip():
+        return ""
+
+    try:
+        from src.rag.tools.wikipedia import patch_wikipedia_client, _clean_wiki_query
+        patch_wikipedia_client()
+        clean_q = _clean_wiki_query(query)
+    except Exception:
+        clean_q = query.strip()
+
+    search_q = clean_q or query.strip()
+
+    # 1. Try direct Wikipedia API wrapper
     try:
         wiki_api = WikipediaAPIWrapper(
             top_k_results=WIKI_TOP_K_RESULTS,
             doc_content_chars_max=max_chars,
         )
-        result = wiki_api.run(query)
-        if result and result.strip():
+        result = wiki_api.run(search_q)
+        if result and result.strip() and "No good Wikipedia Search Result was found" not in result:
+            result = re.sub(r"https?://wt\.wikipedia\.org", "https://en.wikipedia.org", result)
             return result[:max_chars]
     except Exception as e:
-        logger.debug(f"direct_wiki_search failed ({e}); falling back to web search")
+        logger.debug(f"direct_wiki_search API failed ({e}); falling back to web search")
 
-    # Fallback via DDG
-    try:
-        return direct_ddg_search(f"{query} wikipedia", max_chars=max_chars)
-    except Exception:
-        return ""
+    # 2. Targeted fallback via web search (avoid site: operator which triggers wt.wikipedia.org issues)
+    for fallback_query in [f"{search_q} wikipedia summary", f"{search_q} wikipedia"]:
+        try:
+            content = direct_ddg_search(fallback_query, max_chars=max_chars)
+            if content and content.strip():
+                content = re.sub(r"https?://wt\.wikipedia\.org", "https://en.wikipedia.org", content)
+                return content[:max_chars]
+        except Exception as exc:
+            logger.debug(f"direct_wiki_search web fallback failed for '{fallback_query}': {exc}")
+
+    return ""
 
 
 def direct_arxiv_search(query: str, max_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX) -> str:
     """
     Run an ArXiv paper search for *query*.
+    Checks circuit breaker to fail-fast on 429/503/403 rate limits.
     Falls back to DDG search if export.arxiv.org fails.
     """
     try:
-        arxiv_api = ArxivAPIWrapper(
-            top_k_results=ARXIV_TOP_K_RESULTS,
-            doc_content_chars_max=max_chars,
-        )
-        result = arxiv_api.run(query)
-        if result and result.strip():
-            return result[:max_chars]
+        from src.rag.tools.arxiv import is_arxiv_circuit_open, trip_arxiv_circuit, _is_rate_limit_or_server_error
+        if not is_arxiv_circuit_open():
+            arxiv_api = ArxivAPIWrapper(
+                top_k_results=ARXIV_TOP_K_RESULTS,
+                doc_content_chars_max=max_chars,
+            )
+            result = arxiv_api.run(query)
+            if result and result.strip():
+                return result[:max_chars]
     except Exception as e:
+        try:
+            from src.rag.tools.arxiv import trip_arxiv_circuit, _is_rate_limit_or_server_error
+            if _is_rate_limit_or_server_error(e):
+                trip_arxiv_circuit(reason=str(e))
+        except Exception:
+            pass
         logger.debug(f"direct_arxiv_search failed ({e}); falling back to web search")
 
     # Fallback via DDG
@@ -506,6 +634,7 @@ def direct_arxiv_search(query: str, max_chars: int = ARXIV_DOC_CONTENT_CHARS_MAX
         return direct_ddg_search(f"{query} arxiv paper", max_chars=max_chars)
     except Exception:
         return ""
+
 
 
 # ── Agentic Tool Definitions & Router ──────────────────

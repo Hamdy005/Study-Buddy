@@ -230,7 +230,7 @@ class EvaluatorOutput(BaseModel):
     """
     Structured output from the Evaluator node judging context quality.
     """
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     verdict: Verdict = Field(..., description="Relevance and sufficiency verdict")
     missing: str = Field(
@@ -241,6 +241,18 @@ class EvaluatorOutput(BaseModel):
     likely_cause: Cause = Field(
         ...,
         description="Root cause of retrieval gap; 'none' if and only if verdict is 'correct'",
+    )
+    chunk_grades: dict[int, str] = Field(
+        default_factory=dict,
+        description="Grades per chunk: relevant | partial | irrelevant",
+    )
+    relevant_chunks: list[int] = Field(
+        default_factory=list,
+        description="1-indexed list of kept chunk numbers, ordered best first",
+    )
+    missing_topics: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of specific sub-topics not yet answered; empty when verdict is 'correct'",
     )
 
     @field_validator("missing", mode="before")
@@ -350,6 +362,10 @@ class GraphState(TypedDict, total=False):
     on_intent: Any                     # Optional callback invoked when intent is classified
     topic: str | None                  # Optional current study topic name
     chat_history: list[dict[str, Any]] # Previous conversation turns (last 8 messages)
+    chunk_grades: dict[int, str] | None # Optional per-chunk grades from evaluator
+    relevant_chunks: list[int] | None   # Optional kept chunk indices from evaluator
+    verified_pool: list[Chunk]          # Chunks that already satisfy answered sub-parts; never evicted
+    missing_topics: list[str]           # Ordered list of unsatisfied sub-topics for targeted requery
 
 
 class FinalAnswer(BaseModel):

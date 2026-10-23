@@ -17,12 +17,21 @@ async def retrieve_supabase(query: str, top_k: int = TOP_K_CHUNKS, material_id: 
     Search Supabase vector store for relevant knowledge passages using TOP_K_CHUNKS.
     Returns a list of result dictionaries with text, source, url, title.
     """
+    try:
+        top_k = max(1, int(round(float(top_k))))
+    except (TypeError, ValueError):
+        top_k = int(TOP_K_CHUNKS)
     return await asyncio.to_thread(_sync_retrieve_supabase, query, top_k, material_id)
 
 
 def _sync_retrieve_supabase(query: str, top_k: int = TOP_K_CHUNKS, material_id: str | None = None) -> list[dict[str, Any]]:
     if not query.strip():
         return []
+
+    try:
+        top_k = max(1, int(round(float(top_k))))
+    except (TypeError, ValueError):
+        top_k = int(TOP_K_CHUNKS)
 
     try:
         # 1. Use Ensemble Retriever (Vector + BM25) if material_id is provided

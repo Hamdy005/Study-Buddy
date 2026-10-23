@@ -537,17 +537,26 @@ export default function MaterialDetailPage({ params }: { params: Promise<{ id: s
 
         <Tabs value={resolvedTab} onValueChange={handleTabChange} className="mt-6">
           <div className="flex justify-center mb-6">
-            <TabsList className="grid w-full max-w-md grid-cols-3 h-11 p-1 bg-muted/60 dark:bg-card/70 backdrop-blur-sm border border-border/80 dark:border-border/60 rounded-xl shadow-xs">
-              <TabsTrigger value="summary" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
-                <Sparkles className="h-4 w-4" />
+            <TabsList className="grid w-full max-w-lg grid-cols-3 h-12 p-1.5 bg-muted/60 dark:bg-card/70 backdrop-blur-sm border border-border/80 dark:border-border/60 rounded-xl shadow-xs">
+              <TabsTrigger
+                value="summary"
+                className="gap-2.5 text-[15px] sm:text-base font-semibold transition-all duration-200 cursor-pointer text-muted-foreground hover:text-primary hover:bg-primary/10 dark:hover:text-primary dark:hover:bg-primary/15 data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs"
+              >
+                <Sparkles className="h-4.5 w-4.5" />
                 <span className="hidden sm:inline">Summary</span>
               </TabsTrigger>
-              <TabsTrigger value="chat" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
-                <MessageSquare className="h-4 w-4" />
+              <TabsTrigger
+                value="chat"
+                className="gap-2.5 text-[15px] sm:text-base font-semibold transition-all duration-200 cursor-pointer text-muted-foreground hover:text-primary hover:bg-primary/10 dark:hover:text-primary dark:hover:bg-primary/15 data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs"
+              >
+                <MessageSquare className="h-4.5 w-4.5" />
                 <span className="hidden sm:inline">Chat</span>
               </TabsTrigger>
-              <TabsTrigger value="quiz" className="gap-2 font-medium transition-all data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs">
-                <Brain className="h-4 w-4" />
+              <TabsTrigger
+                value="quiz"
+                className="gap-2.5 text-[15px] sm:text-base font-semibold transition-all duration-200 cursor-pointer text-muted-foreground hover:text-primary hover:bg-primary/10 dark:hover:text-primary dark:hover:bg-primary/15 data-[state=active]:bg-card dark:data-[state=active]:bg-card/90 data-[state=active]:text-foreground data-[state=active]:shadow-xs"
+              >
+                <Brain className="h-4.5 w-4.5" />
                 <span className="hidden sm:inline">Quiz</span>
               </TabsTrigger>
             </TabsList>
@@ -1671,7 +1680,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
   }
 
   return (
-    <div className="h-[760px] md:h-[780px] flex flex-col overflow-hidden border border-border/80 dark:border-border/60 shadow-sm bg-card rounded-2xl">
+    <div className="h-[calc(100vh-9.5rem)] min-h-[870px] max-h-[880px] flex flex-col overflow-hidden border border-border/80 dark:border-border/60 shadow-sm bg-card rounded-2xl">
       {/* Header */}
       <div className="px-3 md:px-5 border-b border-border/80 dark:border-border/60 bg-muted/40 dark:bg-card/90 backdrop-blur-sm h-16 md:h-18 flex items-center justify-between shrink-0 group">
         <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 mr-2">
@@ -1778,14 +1787,14 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
         {sidebarOpen && (
           <div
             onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 bg-black/40 z-20 md:hidden"
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs z-20 md:hidden transition-opacity"
           />
         )}
 
         {/* Sidebar (Desktop Side Panel + Mobile Drawer) */}
         {sidebarOpen && (
-          <div className="absolute md:relative inset-y-0 left-0 z-30 w-72 md:w-64 flex flex-col border-r border-border/80 dark:border-border/60 bg-muted/25 dark:bg-card/50 min-h-0 shadow-2xl md:shadow-none">
-            <div className="p-4 border-b border-border/80 dark:border-border/60 flex items-center justify-between gap-2">
+          <div className="absolute md:relative inset-y-0 left-0 z-30 w-[82vw] max-w-xs md:w-64 flex flex-col border-r border-border/80 dark:border-border/60 bg-card dark:bg-[#16171b] md:bg-muted/25 md:dark:bg-card/50 min-h-0 shadow-2xl md:shadow-none">
+            <div className="p-4 border-b border-border/80 dark:border-border/60 flex items-center justify-between gap-2 bg-card dark:bg-[#16171b] md:bg-transparent">
               <Button
                 onClick={() => {
                   createNewSession()
@@ -1933,7 +1942,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                           : 'bg-card dark:bg-[#18191e] border border-border/80 dark:border-border/60 text-foreground rounded-tl-none shadow-xs'
                         }`}>
                         {m.role === 'user' ? (
-                          <p dir="auto" className="text-[15.5px] md:text-[16px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                          <p dir="auto" className="text-[16px] md:text-[17px] leading-relaxed whitespace-pre-wrap">{m.content}</p>
                         ) : !m.content && isStreamingActive ? (
                           <div className="flex items-center gap-2.5 py-1.5 px-1">
                             <div className="flex items-center gap-1.5">
@@ -1942,13 +1951,13 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                               <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
                             </div>
                             {currentQueryIntent === 'complex' && (
-                              <span className="text-[13.5px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
+                              <span className="text-[14px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
                                 This may take some time
                               </span>
                             )}
                           </div>
                         ) : (
-                          <div className="text-[16px] md:text-[16.5px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
+                          <div className="text-[16.5px] md:text-[17.5px] leading-relaxed [&_strong]:font-semibold [&_li]:mb-1">
                             {renderMarkdown(m.content)}
                             {isStreamingActive && (
                               <span className="inline-flex items-center gap-1 ml-2 align-middle">
@@ -1972,7 +1981,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                         <span className="h-2 w-2 rounded-full bg-primary animate-bounce" />
                       </div>
                       {currentQueryIntent === 'complex' && (
-                        <span className="text-[13.5px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
+                        <span className="text-[14px] text-muted-foreground font-normal tracking-wide animate-in fade-in duration-300 select-none">
                           This may take some time
                         </span>
                       )}
@@ -2003,7 +2012,7 @@ function ChatTab({ materialId, sourceType, topic, materialTitle }: {
                   }
                   dir={asrLang === 'ar' ? 'rtl' : 'ltr'}
                   disabled={!currentSessionId}
-                  className="w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none focus:ring-0 min-h-[64px] max-h-[160px] resize-none py-1.5 px-2 md:py-2 md:px-3 text-base md:text-[16.5px] leading-relaxed placeholder:text-muted-foreground/60 shadow-none text-foreground"
+                  className="w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none focus:ring-0 min-h-[63px] max-h-[160px] resize-none py-1.5 px-3 md:py-2 md:px-3 text-[16px] md:text-[17px] leading-relaxed placeholder:text-muted-foreground/60 shadow-none text-foreground"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()

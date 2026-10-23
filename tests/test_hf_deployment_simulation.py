@@ -68,7 +68,7 @@ class TestHFDeploymentSimulation:
         # Database store for simulated DB operations
         db_store: dict[str, dict] = {}
 
-        def mock_save_refresh(uid: str, thash: str):
+        def mock_save_refresh(uid: str, thash: str, email: str = None, **kwargs):
             row = {
                 "id": "ref-123",
                 "user_id": uid,

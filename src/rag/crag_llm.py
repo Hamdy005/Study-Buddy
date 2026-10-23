@@ -56,7 +56,7 @@ class LangChainLLM:
             return self._chat_model
         try:
             from src.rag.rag import get_llm
-            self._chat_model = get_llm()
+            self._chat_model = get_llm(model=self.model_name)
             if hasattr(self._chat_model, "model_name"):
                 self.model_name = self._chat_model.model_name
             elif hasattr(self._chat_model, "model"):
@@ -65,8 +65,11 @@ class LangChainLLM:
         except Exception:
             raise RuntimeError("No chat model provided and could not import default from src.rag.rag")
 
-    async def ainvoke(self, prompt: str) -> str:
+    async def ainvoke(self, prompt: str, max_tokens: int | None = None) -> str:
         model = self._get_chat_model()
+        # Apply a per-call max_tokens cap if requested (e.g. to constrain generator verbosity)
+        if max_tokens is not None and hasattr(model, "bind"):
+            model = model.bind(max_tokens=max_tokens)
         if hasattr(model, "ainvoke"):
             res = await model.ainvoke(prompt)
         elif hasattr(model, "invoke"):
@@ -78,8 +81,10 @@ class LangChainLLM:
             return str(res.content)
         return str(res)
 
-    async def astream(self, prompt: str):
+    async def astream(self, prompt: str, max_tokens: int | None = None):
         model = self._get_chat_model()
+        if max_tokens is not None and hasattr(model, "bind"):
+            model = model.bind(max_tokens=max_tokens)
         if hasattr(model, "astream"):
             async for chunk in model.astream(prompt):
                 self._extract_usage(chunk)
@@ -87,7 +92,7 @@ class LangChainLLM:
                 if content:
                     yield str(content)
         else:
-            ans = await self.ainvoke(prompt)
+            ans = await self.ainvoke(prompt, max_tokens=max_tokens)
             yield ans
 
     async def ainvoke_structured(self, prompt: str, schema: type[T]) -> T:
@@ -191,18 +196,38 @@ class LangChainLLM:
 
     @staticmethod
     def _parse_evaluator_lines(text: str) -> dict[str, Any] | None:
-        """Parse key-value lines for EvaluatorOutput: VERDICT, CAUSE, MISSING."""
+        """Parse key-value lines for EvaluatorOutput: CHUNK grades, RELEVANT_CHUNKS, VERDICT, CAUSE, MISSING."""
         verdict = None
         cause = None
         missing = ""
+        chunk_grades: dict[int, str] = {}
+        relevant_chunks: list[int] = []
         in_missing = False
+
         for raw_line in text.strip().splitlines():
             line = raw_line.strip()
             if not line:
                 continue
             cleaned = re.sub(r"[*#`]", "", line).strip()
             lower = cleaned.lower()
-            if lower.startswith("verdict:"):
+
+            # 1. Parse CHUNK <n>: <grade>
+            chunk_match = re.match(r"^chunk\s*(\d+)\s*:\s*(\w+)", cleaned, re.IGNORECASE)
+            if chunk_match:
+                in_missing = False
+                c_num = int(chunk_match.group(1))
+                c_grade = chunk_match.group(2).lower()
+                if c_grade in ("relevant", "partial", "irrelevant"):
+                    chunk_grades[c_num] = c_grade
+                continue
+
+            # 2. Parse RELEVANT_CHUNKS: [i, j, ...]
+            if lower.startswith("relevant_chunks:"):
+                in_missing = False
+                val = cleaned.split(":", 1)[1].strip()
+                nums = re.findall(r"\d+", val)
+                relevant_chunks = [int(n) for n in nums]
+            elif lower.startswith("verdict:"):
                 in_missing = False
                 val = cleaned.split(":", 1)[1].strip().lower()
                 words = set(re.findall(r"\w+", val))
@@ -226,8 +251,12 @@ class LangChainLLM:
                 missing = cleaned.split(":", 1)[1].strip()
                 in_missing = True
             elif in_missing:
-                if not (lower.startswith("verdict:") or lower.startswith("cause:") or lower.startswith("likely_cause:")):
+                if not (lower.startswith("verdict:") or lower.startswith("cause:") or lower.startswith("likely_cause:") or lower.startswith("chunk") or lower.startswith("relevant_chunks:")):
                     missing += " " + cleaned
+
+        # Fallback for relevant_chunks if not explicitly parsed from a RELEVANT_CHUNKS line
+        if not relevant_chunks and chunk_grades:
+            relevant_chunks = [num for num, grade in sorted(chunk_grades.items()) if grade in ("relevant", "partial")]
 
         if verdict:
             if verdict == "correct":
@@ -237,7 +266,13 @@ class LangChainLLM:
                 cause = "bad_query"
                 if not missing or missing.lower() in ("none", "n/a", "null", "unknown", "nothing"):
                     missing = "additional context needed"
-            return {"verdict": verdict, "likely_cause": cause, "missing": missing.strip()}
+            return {
+                "verdict": verdict,
+                "likely_cause": cause,
+                "missing": missing.strip(),
+                "chunk_grades": chunk_grades,
+                "relevant_chunks": relevant_chunks,
+            }
         return None
 
     @staticmethod
@@ -452,3 +487,20 @@ class MockLLM:
             return EvaluatorOutput(verdict="correct", missing="", likely_cause="none")  # type: ignore
 
         raise RuntimeError(f"No mock response configured for schema {schema}")
+
+
+def create_crag_llm(
+    model_name: str = "ministral-8b-latest",
+    temperature: float = 0.3,
+    max_tokens: int = 3500,
+    timeout: int = 120,
+) -> LangChainLLM:
+    """Create a LangChainLLM instance backed by a specific Mistral model tier."""
+    from src.rag.rag import get_mistral_model
+    chat_model = get_mistral_model(
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+    return LangChainLLM(chat_model=chat_model, model_name=model_name)

@@ -10,7 +10,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from src.rag.config import Settings, settings as default_settings
 from src.rag.constants import GRAPH_RECURSION_LIMIT
-from src.rag.crag_llm import LLM, LangChainLLM
+from src.rag.crag_llm import LLM, LangChainLLM, create_crag_llm
+from src.rag.rag import get_rag_router_llm
 from src.rag.crag_nodes import (
     create_evaluator_node,
     create_fallback_node,
@@ -40,35 +41,54 @@ def build_graph(
     llm: LLM | None = None,
     reranker: Reranker | None = None,
     tools: dict[Source, RetrieverFn] | None = None,
+    triage_llm: LLM | None = None,
+    router_llm: LLM | None = None,
+    tool_selector_llm: Any = None,
+    evaluator_llm: LLM | None = None,
+    generator_llm: LLM | None = None,
+    fallback_llm: LLM | None = None,
 ) -> CompiledStateGraph:
     """
     Construct, wire, and compile the CRAG StateGraph pipeline.
+    Multi-model architecture:
+      - Router, triage, reply chitchat, reply refusal: ministral-8b-latest
+      - Retriever (tool selector) & Evaluator: Mistral Medium 3.5 (mistral-medium-latest)
+      - Generator & Fallback: Mistral Large 4 (mistral-large-latest)
     """
     cfg = settings or default_settings
-    llm_instance = llm or LangChainLLM()
-    reranker_instance = reranker or CascadeReranker(settings=cfg, llm=llm_instance)
+
+    # Role-specific LLMs (falling back to generic `llm` if provided):
+    t_llm = triage_llm or (llm if llm is not None else create_crag_llm(cfg.TRIAGE_MODEL, temperature=0.0, max_tokens=1000, timeout=int(cfg.TRIAGE_TIMEOUT_S)))
+    r_llm = router_llm or (llm if llm is not None else create_crag_llm(cfg.ROUTER_MODEL, temperature=0.0, max_tokens=500, timeout=30))
+    ts_llm = tool_selector_llm or (getattr(llm, "_chat_model", None) if llm is not None else get_rag_router_llm(cfg.TOOL_SELECTOR_MODEL))
+    e_llm = evaluator_llm or (llm if llm is not None else create_crag_llm(cfg.EVALUATOR_MODEL, temperature=0.0, max_tokens=1000, timeout=60))
+    g_llm = generator_llm or (llm if llm is not None else create_crag_llm(cfg.GENERATOR_MODEL, temperature=0.0, max_tokens=1500, timeout=120))
+    f_llm = fallback_llm or (llm if llm is not None else create_crag_llm(cfg.FALLBACK_MODEL, temperature=0.0, max_tokens=3500, timeout=120))
+
+    reranker_instance = reranker or CascadeReranker(settings=cfg, llm=e_llm)
 
     workflow = StateGraph(GraphState)
 
-    workflow.add_node("triage", create_triage_node(llm=llm_instance, settings=cfg))
+    workflow.add_node("triage", create_triage_node(llm=t_llm, settings=cfg))
     workflow.add_node("reply_chitchat", create_reply_chitchat_node())
     workflow.add_node("reply_refusal", create_reply_refusal_node())
     workflow.add_node("init_state", create_init_state_node())
     workflow.add_node(
         "router",
         create_router_node(
-            llm=llm_instance,
+            llm=r_llm,
+            tool_selector_llm=ts_llm,
             settings=cfg,
         ),
     )
     workflow.add_node("retrieve", create_retrieve_node(tools=tools, settings=cfg))
     workflow.add_node("normalize", create_normalize_node())
     workflow.add_node("merge_pool", create_merge_pool_node(settings=cfg))
-    workflow.add_node("rerank", create_rerank_node(reranker=reranker_instance, settings=cfg, llm=llm_instance))
-    workflow.add_node("evaluator", create_evaluator_node(llm=llm_instance))
+    workflow.add_node("rerank", create_rerank_node(reranker=reranker_instance, settings=cfg, llm=e_llm))
+    workflow.add_node("evaluator", create_evaluator_node(llm=e_llm))
     workflow.add_node("retry_check", create_retry_check_node(settings=cfg))
-    workflow.add_node("generate", create_generate_node(llm=llm_instance))
-    workflow.add_node("fallback", create_fallback_node(llm=llm_instance, settings=cfg))
+    workflow.add_node("generate", create_generate_node(llm=g_llm, settings=cfg))
+    workflow.add_node("fallback", create_fallback_node(llm=f_llm, settings=cfg))
 
     workflow.add_edge(START, "triage")
     workflow.add_conditional_edges(

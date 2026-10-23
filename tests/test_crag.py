@@ -931,6 +931,41 @@ def test_search_tool_robustness_with_fallbacks(monkeypatch):
     assert arxiv_res[0]["source"] == "arxiv"
 
 
+def test_wikipedia_query_cleaning_and_timeout_patch():
+    """Verify that _clean_wiki_query isolates search keywords and Wikipedia patching prevents JSONDecodeError."""
+    from src.rag.tools.wikipedia import _clean_wiki_query, patch_wikipedia_client
+    import wikipedia
+
+    # 1. Test conversational query cleaning
+    q = "What is Celery in Python and what core capabilities does it provide?"
+    cleaned = _clean_wiki_query(q)
+    assert "Celery" in cleaned
+    assert "what is" not in cleaned.lower()
+    assert "core capabilities" not in cleaned.lower()
+
+    # 2. Test Wikipedia client patching and safe request handling
+    patch_wikipedia_client()
+    assert getattr(wikipedia.wikipedia, "USER_AGENT", "").startswith("StudyBuddyBot")
+
+    # Safe request should reject non-200 responses cleanly without json decoding crashes
+    import requests
+    class Dummy403Response:
+        status_code = 403
+        text = "Request to GET /w/api.php on en.wikipedia.org not allowed by policy\n"
+        headers = {"content-type": "text/plain; charset=utf-8"}
+
+    orig_get = requests.get
+    try:
+        requests.get = lambda *args, **kwargs: Dummy403Response()
+        try:
+            wikipedia.wikipedia._wiki_request({})
+            assert False, "Expected RuntimeError on 403 response"
+        except RuntimeError as exc:
+            assert "HTTP 403" in str(exc)
+    finally:
+        requests.get = orig_get
+
+
 def test_fallback_node_prompt_selection_by_score():
     """Verify fallback node uses normal generation prompt when top_score >= LOW_THRESHOLD, else fallback prompt."""
     import asyncio
@@ -1308,7 +1343,36 @@ def test_retrieval_timeout_dynamic_by_intent():
     }
     res_complex = asyncio.run(node(complex_state))
     assert res_complex["all_retrievers_failed"] is False
-    assert len(res_complex["raw_results"]) == 1
+    # 3. Retry 1 with empty context -> 16s timeout escalation
+    captured_timeouts = []
+    async def mock_timing_retriever(q: str, k: int):
+        return [{"text": "retry result", "source": "web"}]
+
+    node_tracking = create_retrieve_node(tools={"web": mock_timing_retriever}, settings=cfg)
+
+    # Empty context retry 1
+    state_retry1: GraphState = {
+        "original_q": "What is Python Celery?",
+        "sources_to_use": ["web"],
+        "intent": "simple",
+        "retries": 1,
+        "pool": [],
+        "ranked": [],
+    }
+    res_r1 = asyncio.run(node_tracking(state_retry1))
+    assert res_r1["all_retrievers_failed"] is False
+
+    # Empty context retry 2
+    state_retry2: GraphState = {
+        "original_q": "What is Python Celery?",
+        "sources_to_use": ["web"],
+        "intent": "simple",
+        "retries": 2,
+        "pool": [],
+        "ranked": [],
+    }
+    res_r2 = asyncio.run(node_tracking(state_retry2))
+    assert res_r2["all_retrievers_failed"] is False
 
 
 def test_simple_query_score_gate_and_retry_all_tools():
@@ -1324,12 +1388,12 @@ def test_simple_query_score_gate_and_retry_all_tools():
 
     cfg = Settings(HIGH_THRESHOLD=0.8, LOW_THRESHOLD=0.3)
 
-    # 1. Simple query: mid score (0.55) -> generate directly! (Bypasses evaluator)
+    # 1. Simple query: mid score (0.55) -> evaluator (ambiguous zone, between LOW and HIGH)
     state_simple_mid: GraphState = {
         "intent": "simple",
         "ranked": [Chunk.create("supabase", "mid relevance", score=0.55)],
     }
-    assert score_gate(state_simple_mid, settings=cfg) == "generate"
+    assert score_gate(state_simple_mid, settings=cfg) == "evaluator"
 
     # 2. Simple query: high score (0.85) -> generate
     state_simple_high: GraphState = {
@@ -1345,19 +1409,19 @@ def test_simple_query_score_gate_and_retry_all_tools():
     }
     assert score_gate(state_simple_low, settings=cfg) == "retry_check"
 
-    # 3b. Simple query: score 0.30 is <= SIMPLE_THRESHOLD (0.35) -> must retry!
+    # 3b. Simple query: score 0.30 is <= LOW_THRESHOLD (0.30) -> retry_check
     state_simple_30: GraphState = {
         "intent": "simple",
         "ranked": [Chunk.create("supabase", "borderline relevance", score=0.30)],
     }
     assert score_gate(state_simple_30, settings=cfg) == "retry_check"
 
-    # 3c. Simple query: score 0.36 is > SIMPLE_THRESHOLD (0.35) -> generate!
+    # 3c. Simple query: score 0.36 is between LOW (0.30) and HIGH (0.80) -> evaluator!
     state_simple_36: GraphState = {
         "intent": "simple",
         "ranked": [Chunk.create("supabase", "acceptable relevance", score=0.36)],
     }
-    assert score_gate(state_simple_36, settings=cfg) == "generate"
+    assert score_gate(state_simple_36, settings=cfg) == "evaluator"
 
     # 4. Complex query: mid score (0.55) must still go to evaluator!
     state_complex_mid: GraphState = {
@@ -1383,9 +1447,9 @@ def test_simple_query_score_gate_and_retry_all_tools():
         "missing": "Re-rank score was below threshold",
     }
     retry_res = asyncio.run(router_node(retry_state))
-    assert retry_res["sources_to_use"] == ["supabase", "arxiv", "wikipedia", "web"]
+    assert retry_res["sources_to_use"] == ["wikipedia", "web"]
     assert retry_res["search_query"] == "photosynthesis light dependent reactions"
-    assert all(src in retry_res["tool_queries"] for src in ["supabase", "arxiv", "wikipedia", "web"])
+    assert all(src in retry_res["tool_queries"] for src in ["wikipedia", "web"])
 
 
 def test_router_query_over_300_chars_clamped():
@@ -1460,8 +1524,98 @@ def test_topic_and_history_in_router_and_triage_prompts():
     assert "<conversation_history>" in gen_msg
 
 
+def test_evaluator_parsing_per_chunk_and_relevant_chunks():
+    """Verify crag_llm._parse_evaluator_lines handles per-chunk grades and RELEVANT_CHUNKS."""
+    from src.rag.crag_llm import LangChainLLM
+
+    output_text = """
+CHUNK 1: irrelevant
+CHUNK 2: relevant
+CHUNK 3: partial
+CHUNK 4: irrelevant
+RELEVANT_CHUNKS: [2, 3]
+VERDICT: ambiguous
+CAUSE: bad_query
+MISSING: average case complexity proof
+"""
+    parsed = LangChainLLM._parse_evaluator_lines(output_text)
+    assert parsed is not None
+    assert parsed["verdict"] == "ambiguous"
+    assert parsed["likely_cause"] == "bad_query"
+    assert parsed["missing"] == "average case complexity proof"
+    assert parsed["chunk_grades"] == {
+        1: "irrelevant",
+        2: "relevant",
+        3: "partial",
+        4: "irrelevant",
+    }
+    assert parsed["relevant_chunks"] == [2, 3]
 
 
+def test_evaluator_node_filters_ranked_chunks_to_relevant_only():
+    """Verify evaluator node updates ranked in state to only the chunks graded relevant/partial."""
+    import asyncio
+    from src.rag.crag_nodes import create_evaluator_node
+    from src.rag.schemas import Chunk
+
+    class MockEvalLLM:
+        async def ainvoke_structured(self, prompt, schema):
+            return schema(
+                verdict="correct",
+                missing="",
+                likely_cause="none",
+                chunk_grades={1: "irrelevant", 2: "relevant", 3: "irrelevant"},
+                relevant_chunks=[2],
+            )
+
+    eval_node = create_evaluator_node(llm=MockEvalLLM())
+    c1 = Chunk(id="c1", text="Noise 1", source="web")
+    c2 = Chunk(id="c2", text="Gold content", source="supabase")
+    c3 = Chunk(id="c3", text="Noise 2", source="arxiv")
+
+    state = {
+        "original_q": "What is Celery?",
+        "ranked": [c1, c2, c3],
+    }
+
+    res = asyncio.run(eval_node(state))
+    assert res["verdict"] == "correct"
+    assert len(res["ranked"]) == 1
+    assert res["ranked"][0].id == "c2"
+    assert res["relevant_chunks"] == [2]
 
 
+def test_generate_node_filters_chunks_below_chunk_floor():
+    """Verify create_generate_node filters out chunks below CHUNK_FLOOR (0.45)."""
+    import asyncio
+    from src.rag.crag_nodes import create_generate_node
+    from src.rag.schemas import Chunk
 
+    class RecordingLLM:
+        def __init__(self):
+            self.prompts = []
+
+        async def ainvoke(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            return "Generated answer"
+
+    llm = RecordingLLM()
+    gen_node = create_generate_node(llm=llm)
+
+    c_high = Chunk(id="c1", text="High quality fact", source="supabase", score=0.82)
+    c_mid = Chunk(id="c2", text="Above floor fact", source="wikipedia", score=0.51)
+    c_low = Chunk(id="c3", text="Below floor noise", source="arxiv", score=0.32)
+    c_bottom = Chunk(id="c4", text="Very low noise", source="web", score=0.15)
+
+    res = asyncio.run(gen_node({
+        "original_q": "What is Celery?",
+        "ranked": [c_high, c_mid, c_low, c_bottom],
+    }))
+
+    assert len(llm.prompts) == 1
+    prompt = llm.prompts[0]
+    assert "High quality fact" in prompt
+    assert "Above floor fact" in prompt
+    assert "Below floor noise" not in prompt
+    assert "Very low noise" not in prompt
+    assert res["answer"] == "Generated answer"

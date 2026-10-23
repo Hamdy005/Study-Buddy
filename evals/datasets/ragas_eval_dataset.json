@@ -1,0 +1,423 @@
+[
+  {
+    "id": "celery-06",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "reasoning",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "How does offloading work to Celery workers enable horizontal scaling for web backends?",
+    "reference": "Offloading work to **Celery workers** enables **horizontal scaling** for web backends by decoupling task ingestion from task processing:\n\n- **Decoupled Architecture**: Background tasks run in dedicated worker processes that are completely separate from the web server (e.g., Flask or Django), communicating only via an intermediary message broker.\n- **Independent Resource Scaling**: Because worker processes run separately, they can be scaled horizontally across multiple servers or container instances independently of the web application based on queue length and processing demand.\n- **Web Server Protection**: Moving CPU-intensive or I/O-heavy operations (e.g., data exports, report generation, video processing) to background workers prevents the web tier from being overwhelmed, keeping web request latency low and throughput high.\n- **Load Distribution**: The message broker distributes pending tasks across all available worker instances, ensuring balanced resource utilization across the cluster.",
+    "reference_contexts": [
+      "Celery and Python — A Practical Guide to Background Task ...: Sep 25, 2026 · Celery is the most widely used distributed task queue for Python. It lets you offload work to background workers that run separately from your web server, with support for retries, scheduling, and horizontal scaling."
+    ],
+    "eval_notes": "Synthesis across Chunks 0 and 1."
+  },
+  {
+    "id": "celery-07",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "reasoning",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "Why is idempotency a critical design consideration when configuring Celery retries for background tasks?",
+    "reference": "**Idempotency** is a **critical design consideration** when configuring Celery retries because retries inherently introduce the risk of **duplicate execution**:\n\n- **The Risk of Duplicate Side Effects**: When tasks fail due to transient errors, network timeouts, or worker crashes after a partial operation, Celery's retry mechanism (combined with features like `acks_late`) will re-deliver and re-execute the task. If the task is not idempotent, re-executing it can cause unintended and damaging duplicate side effects (e.g., charging a customer's credit card twice, sending duplicate emails, or creating redundant database entries).\n- **The Idempotency Guarantee**: An idempotent task guarantees that executing the operation multiple times produces the exact same outcome and system state as executing it a single time.\n- **Standard Enforcement Patterns**:\n  - **Deduplication Tokens / Task IDs**: Storing and checking unique execution tokens in a database or cache before running the task.\n  - **Database Constraints**: Using `UNIQUE` constraints and atomic upsert operations (`INSERT ... ON CONFLICT`).\n  - **State Checks**: Verifying whether the target action has already been completed before modifying state.",
+    "reference_contexts": [
+      "Celery and Background Tasks for Python Backends: Apr 28, 2026 · Home All Posts Python Celery and Background Tasks for Python Backends How to use Celery properly — brokers, workers, retries, idempotency, scheduling, and the patterns that don't bite you in production.\nWorkers Guide — Celery 5.6.3 documentation: If the queue name is defined in task_queues it will use that configuration, but if it’s not defined in the list of queues Celery will automatically generate a new queue for you (depending on the task_create_missing_queues option)."
+    ],
+    "eval_notes": "Combines email task example in Chunk 0 with retries and idempotency in Chunk 3."
+  },
+  {
+    "id": "os7-10",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "hybrid_gap",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "Lecture 7 notes that disk scheduling algorithms optimize seek time. Explain how the Shortest Seek Time First (SSTF) and SCAN (Elevator) scheduling algorithms work and compare their trade-offs.",
+    "reference": "While Lecture 7 notes that disk scheduling algorithms optimize seek time, **Shortest Seek Time First (SSTF)** and **SCAN (Elevator)** are two prominent scheduling algorithms with distinct trade-offs:\n\n### **1. Shortest Seek Time First (SSTF)**\n- **How It Works**: Selects the pending I/O request that requires the minimum head movement from the current cylinder position, prioritizing the shortest immediate seek time.\n- **Advantages**: Substantially reduces average seek time and delivers high throughput under light to moderate workloads.\n- **Trade-off / Limitation**: Suffers from **starvation** for requests located far away on the disk if a continuous stream of requests arrives near the current head position.\n\n### **2. SCAN (Elevator Algorithm)**\n- **How It Works**: Moves the disk arm continuously in one direction across the disk platters, servicing all pending requests along the way until it reaches the edge of the disk, then reverses direction to service requests on the return sweep.\n- **Advantages**: Eliminates starvation and provides fairer, more predictable wait times across all cylinders.\n- **Trade-off / Limitation**: May yield slightly higher average seek time than SSTF under light loads and introduces latency for requests that just missed the passing head.\n\n### **Summary of Trade-offs**\nIn summary, **SSTF prioritizes raw seek time efficiency at the cost of fairness (causing potential starvation)**, whereas **SCAN ensures fairness and starvation prevention by systematically sweeping across the entire disk**.",
+    "reference_contexts": [
+      "•Block vs. Character devices.\n•Device controllers act as intermediaries.\n•DMA enhances performance by bypassing the CPU for data transfers.\n•Disks provide high -capacity, cost -effective, non -volatile storage.\n•Disk structure consists of partitions, boot records, and file allocation tables.\n•Scheduling algorithms optimize seek time.\n•Common disk errors include programming, seek, and scheduler errors."
+    ],
+    "eval_notes": "HYBRID FALLBACK TEST: Chunk 5 mentions disk scheduling optimizing seek time, but SSTF/SCAN algorithm details require model parametric domain knowledge. Tests GENERATE_HYBRID_PROMPT."
+  },
+  {
+    "id": "celery-08",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "hybrid_gap",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "The material notes that Celery uses brokers to pass messages to workers. What message brokers are commonly used with Celery, and how does a message broker function between Flask and Celery workers?",
+    "reference": "While the material introduces the role of brokers and workers, the standard message brokers commonly used with Celery are **RabbitMQ** (the default, full-featured AMQP message broker) and **Redis** (a popular, high-performance in-memory key-value store).\n\n### **How a Message Broker Functions Between Flask and Celery Workers**\nThe message broker acts as an asynchronous intermediary buffer that decouples the Flask web application (producer) from the Celery workers (consumers):\n\n1. **Task Dispatch (Flask Producer)**:\n   When a user request triggers a background task, Flask serializes the task function name and arguments (e.g., into JSON) and publishes a task message to the broker queue. Flask immediately receives an `AsyncResult` reference and returns a response to the user without waiting.\n2. **Message Queuing & Buffering**:\n   The broker holds and persists the task message in a queue, safeguarding against traffic surges and ensuring messages are not lost if workers are temporarily busy.\n3. **Task Consumption & Execution (Celery Workers)**:\n   Independent Celery worker processes continuously monitor the broker queue, consume available task messages, execute the Python task logic, and send back task acknowledgments.\n4. **Result Storage (Optional)**:\n   If configured with a result backend (such as Redis or a database), workers store execution results and return values for subsequent retrieval by Flask.",
+    "reference_contexts": [
+      "Celery and Background Tasks for Python Backends: Apr 28, 2026 · Home All Posts Python Celery and Background Tasks for Python Backends How to use Celery properly — brokers, workers, retries, idempotency, scheduling, and the patterns that don't bite you in production.\nWorkers Guide — Celery 5.6.3 documentation: If the queue name is defined in task_queues it will use that configuration, but if it’s not defined in the list of queues Celery will automatically generate a new queue for you (depending on the task_create_missing_queues option)."
+    ],
+    "eval_notes": "HYBRID FALLBACK TEST: Material mentions brokers/workers, but specific brokers (RabbitMQ/Redis) and broker protocol details require model domain knowledge. Tests GENERATE_HYBRID_PROMPT."
+  },
+  {
+    "id": "celery-09",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "hybrid_gap",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "How do you define a basic Celery task in Python using the @celery.task or @shared_task decorator, and how do you invoke it asynchronously from a route?",
+    "reference": "In Python, defining and asynchronously invoking a Celery task is implemented as follows:\n\n### **1. Defining the Celery Task**\nYou define a task by decorating a Python function with either **`@celery.task`** (when decorating within a module having access to the concrete Celery application instance) or **`@shared_task`** (the recommended pattern for reusable apps such as Django or modular Flask packages without a direct app reference):\n\n```python\nfrom celery import shared_task\n\n@shared_task\ndef send_user_notification(user_id: int, message: str):\n    # Background task logic\n    return f\"Notification sent to {user_id}: {message}\"\n```\n\n### **2. Invoking the Task Asynchronously from a Route**\nTo execute the task in the background without blocking the HTTP request, invoke the function using **`.delay()`** or **`.apply_async()`**:\n\n- **Using `.delay(*args, **kwargs)`**:\n  The standard, convenient shortcut for asynchronous dispatch:\n  ```python\n  task = send_user_notification.delay(user_id=42, message=\"Welcome!\")\n  ```\n- **Using `.apply_async(args=[...], kwargs={...}, countdown=...)`**:\n  Used when you need advanced execution options such as execution delays (`countdown`), custom queue routing, or task expiration:\n  ```python\n  task = send_user_notification.apply_async(args=[42, \"Welcome!\"], countdown=30)\n  ```\n\nBoth calls push the task message to the message broker and immediately return an **`AsyncResult`** object containing the task's unique `id`, allowing the route to respond immediately without waiting.",
+    "reference_contexts": [
+      "--- Web Search ---\nBackground Tasks with Celery — Flask Documentation (3.1.x): Background Tasks with Celery ¶ If your application has a long running task, such as processing some uploaded data or sending email, you don’t want to wait for it to finish during a request. Instead, use a task queue to send the necessary data to another process that will run the task in the background while the request returns immediately.",
+      "Celery Background Tasks — Flask Documentation (2.3.x): Celery is a powerful task queue that can be used for simple background tasks as well as complex multi-stage programs and schedules. This guide will show you how to configure Celery using Flask, but assumes you’ve already read the First Steps with Celery guide in the Celery documentation. Install ¶ Celery is a separate Python package."
+    ],
+    "eval_notes": "HYBRID FALLBACK TEST: Context notes configuring Celery with Flask and returning immediately, but syntax (.delay / decorators) requires model parametric knowledge."
+  },
+  {
+    "id": "rl-12",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "hybrid_gap",
+    "expected_pipeline_path": "hybrid_fallback",
+    "user_input": "The text explains the Bellman expectation equation for policy evaluation. Explain the Bellman optimality equation for Q*(s, a) and describe why Value Iteration is guaranteed to converge using the Contraction Mapping Theorem.",
+    "reference": "### **Bellman Optimality Equation for \\( Q^*(s, a) \\)**\nWhile the Bellman expectation equation evaluates a specific policy, the **Bellman optimality equation** for the optimal action-value function \\( Q^*(s, a) \\) states that the optimal return must equal the expected immediate reward plus the discounted optimal return from the best possible subsequent action:\n\n\\[\nQ^*(s, a) = \\mathbb{E}_{\\pi^*} \\left[ r_{t+1} + \\gamma \\max_{a' \\in \\mathcal{A}} Q^*(s_{t+1}, a') \\;\\middle|\\; s_t = s, a_t = a \right]\n\\]\n\nUnfolding this expectation over transition dynamics \\( \\mathcal{T}(s' \\mid s, a) \\) and rewards \\( \\mathcal{R}(s, a, s') \\):\n\n\\[\nQ^*(s, a) = \\sum_{s' \\in \\mathcal{S}} \\mathcal{T}(s' \\mid s, a) \\left[ \\mathcal{R}(s, a, s') + \\gamma \\max_{a' \\in \\mathcal{A}} Q^*(s', a') \right]\n\\]\n\n### **Convergence of Value Iteration via the Contraction Mapping Theorem**\nValue Iteration iteratively applies the Bellman optimality operator \\( \\mathcal{T}^* \\): \\( Q_{k+1} = \\mathcal{T}^*(Q_k) \\). Convergence is guaranteed by the **Contraction Mapping Theorem (Banach Fixed-Point Theorem)**:\n\n1. **\\( \\gamma \\)-Contraction Property**:\n   When the discount factor satisfies \\( 0 \\leq \\gamma < 1 \\), the operator \\( \\mathcal{T}^* \\) is a contraction mapping under the infinity norm (supremum norm):\n   \\[\n   \\|\\mathcal{T}^* Q - \\mathcal{T}^* Q'\\|_\\infty \\leq \\gamma \\|Q - Q'\\|_\\infty\n   \\]\n   Applying the operator shrinks the maximum difference between any two value function estimates by at least a factor of \\( \\gamma \\).\n2. **Complete Metric Space**:\n   The space of bounded value functions equipped with the infinity norm is a complete metric space (a Banach space).\n3. **Unique Fixed Point**:\n   By the Banach Fixed-Point Theorem, any contraction mapping on a complete metric space has a **unique fixed point** \\( Q^* \\) such that \\( \\mathcal{T}^*(Q^*) = Q^* \\).\n4. **Geometric Convergence**:\n   Repeated application of \\( \\mathcal{T}^* \\) from any arbitrary initial estimate \\( Q_0 \\) is guaranteed to converge geometrically at rate \\( \\gamma \\) to the unique optimal value function \\( Q^* \\).",
+    "reference_contexts": [
+      "V∗(s) = max\na∈AQ∗(s, a)\n= max\na∈AEπ∗[Gt|st=s, at=a]\n= max\na∈AEπ∗[rt+1+γV∗(s′)|st=s, at=a, st+1=s′]. (12)\nThis last result is the Bellman optimality equation (Bellman, 1957) for the state-value function. By unfolding the\nexpected value, we get:\nV∗(s) = max\na∈AX\ns′∈ST(s′|s, a) [R(s, a, s′) +γV∗(s′)]. (13)\nIt can also be expressed for the optimal action-value function as:\nQ∗(s) =Eπ∗[rt+1+γmax\na′∈AQ∗(st+1, a′)|st=s, at=a]\n=X\ns′∈ST(s′|s, a)\u0014\nR(s, a, s′) +γmax\na′∈AQ∗(s′, a′)\u0015\n. (14)\nBellman optimality equations are the basis of most RL algorithms, as they allow to gradually learn the optimal value\nfunctions through an iterative process described in Section 3.1.1. In finite MDPs, the optimal value functions are proven"
+    ],
+    "eval_notes": "HYBRID FALLBACK TEST: Material introduces Bellman expectation equation and iterative value computation, but the formal contraction proof and Banach fixed-point theorem require parametric domain knowledge. Tests GENERATE_HYBRID_PROMPT."
+  },
+  {
+    "id": "os7-05",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "reasoning",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Why is I/O transfer without Direct Memory Access (DMA) inefficient, and what three parameters does the CPU provide to initiate a DMA transfer?",
+    "reference": "### **Why I/O Transfer Without DMA is Inefficient**\nWithout **Direct Memory Access (DMA)**, data transfer relies on programmed I/O where the CPU must manage every byte:\n- The device controller reads data into its buffer.\n- The operating system and CPU must then retrieve the data **byte by byte** from the controller buffer into main memory.\n- This byte-by-byte polling or interrupt-driven retrieval ties up the CPU completely, wasting processor cycles on simple data movement and drastically reducing overall system efficiency.\n\n### **The Three Parameters Provided by the CPU to Initiate DMA**\nTo initiate an autonomous DMA transfer, the processor configures the DMA controller with three parameters:\n1. **Disk Address**: The source or destination address/sector on the disk storage device.\n2. **Number of Bytes to Read**: The total size/count of data bytes to be transferred.\n3. **Main Memory Starting Address**: The starting memory address in RAM where the data should be written to or read from.\n\nOnce these parameters are provided, the controller transfers the data directly to memory without CPU intervention, freeing the processor for other computational tasks.",
+    "reference_contexts": [
+      "❖In some computer systems, these registers are mapped to specific addresses \nwithin the main memory ( I/O Memory Mapping )  \n❖In other systems, these registers use separate addresses that are \nindependent of the main memory ( Independent Addressing).DIRECT MEMORY ACCESS (DMA)\n•Without DMA:\n•Controller reads data into a buffer.\n•OS retrieves data byte by byte \n(inefficient).\n•DMA Technique\n•Processor provides:\n1.Disk address.\n2.Number of bytes to read.\n3.Main memory starting address.\n•Controller transfers data directly \nto memory, freeing the \nprocessor.\n•Benefits of DMA\n•Reduces CPU workload.\n•Improves system efficiency.\n•Allows multitasking while data transfer occurs.DIRECT MEMORY ACCESS (DMA)DISKS\n•Nearly all computers have disk drives.\n•Types: hard disk drives, CD -ROM drives."
+    ],
+    "eval_notes": "Ground truth in Chunk 3."
+  },
+  {
+    "id": "rl-02",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "reasoning",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Why is the simple sum of rewards problematic in infinite-horizon tasks, and how does the discounted return resolve this issue?",
+    "reference": "The **simple sum of rewards** (undiscounted return) is problematic in **infinite-horizon tasks** because when an episode never terminates (\\( T = \\infty \\)), summing an infinite sequence of non-zero rewards can result in an **infinite return**:\n\n\\[\nG_t := \\sum_{k=0}^{\\infty} r_{t+k+1} = \\infty\n\\]\n\nThis makes it mathematically impossible to compare, rank, or optimize different policies because multiple candidate policies could all yield infinite returns.\n\n### **How the Discounted Return Resolves the Issue**\nThe **discounted return** resolves this problem by discounting future rewards exponentially according to their temporal distance from the current step using a **discount factor** \\( \\gamma \\in [0, 1] \\):\n\n\\[\nG_t := \\sum_{k=0}^{\\infty} \\gamma^k r_{t+k+1} = r_{t+1} + \\gamma r_{t+2} + \\gamma^2 r_{t+3} + \\dots\n\\]\n\n- **Guarantees Finite Returns**: When rewards are bounded (\\( |r| \\leq R_{\\max} \\)) and \\( \\gamma < 1 \\), the infinite geometric series converges to a finite value:\n  \\[\n  G_t \\leq \frac{R_{\\max}}{1 - \\gamma}\n  \\]\n- **Balances Immediate vs. Long-Term Returns**: The discount factor \\( \\gamma \\) controls the agent's foresight:\n  - \\( \\gamma \to 0 \\) leads to a myopic agent focused on immediate rewards.\n  - \\( \\gamma \to 1 \\) leads to a farsighted agent emphasizing long-term cumulative return.",
+    "reference_contexts": [
+      "from any step t:\nGt:=rt+1+rt+2+rt+3+...+rT, (5)\nwith the episode ending at step T. In the case where Tis infinite (i.e., the episode never ends) this formulation is\nproblematic as it can result in an infinite return. This motivates another formulation of the return where future rewards\nare discounted by their distance in time to the current step. This discounted return is defined as:\nGt:=rt+1+γrt+2+γ2rt+3+...=∞X\nk=0γkrt+k+1, (6)\nwithγ∈[0,1]thediscount factor . The discounted return favours rewards that are closer in time. The value of the\ndiscount factor controls how far in time the reward should affect the decision of the agent: a γclose to zero favours\nimmediate rewards, while a γclose to one favours long-term returns. In practice, almost all RL methods use the"
+    ],
+    "eval_notes": "Ground truth in Chunk 42. Conceptual and mathematical explanation."
+  },
+  {
+    "id": "rl-06",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "reasoning",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Explain the key algorithmic difference between the update rule of Q-learning and SARSA in terms of target action selection.",
+    "reference": "The key algorithmic difference between **SARSA** and **Q-learning** lies in how they select the **target action** to compute the TD-target in their update rules:\n\n- **SARSA (On-Policy)**:\n  - Updates using the action \\( a_{t+1} \\) that was **actually selected and executed** by the behavior policy in the next state \\( s_{t+1} \\):\n    \\[\n    Q(s_t, a_t) \\leftarrow Q(s_t, a_t) + \u0007lpha \\left[ r_{t+1} + \\gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t) \right]\n    \\]\n  - This requires the experience of two successive steps and learns the action-value function of the behavior policy.\n\n- **Q-learning (Off-Policy)**:\n  - Updates using the **maximum estimated action-value** across all possible actions in the next state \\( s_{t+1} \\), selecting the greedy action regardless of what action was actually taken:\n    \\[\n    Q(s_t, a_t) \\leftarrow Q(s_t, a_t) + \u0007lpha \\left[ r_{t+1} + \\gamma \\max_{a} Q(s_{t+1}, a) - Q(s_t, a_t) \right]\n    \\]\n  - This uses only one transition and learns the action-value function of the greedy policy with respect to \\( Q \\), directly estimating \\( Q^* \\).\n\nIn summary, SARSA follows the **actual next action taken by the behavior policy**, while Q-learning follows the **optimal action predicted by its current greedy policy**.",
+    "reference_contexts": [
+      "reducing the impact of the bootstrapped value estimate.\n3.1.4 SARSA and Q-learning\nThe TD learning approach can be applied for learning action-value functions. In the SARSA algorithm (Rummery &\nNiranjan, 1994), a tuple ⟨st, at, rt+1, st+1, at+1⟩— giving its name to the algorithm — is used to compute the TD\nupdate rule:\nQ(st, at)←Q(st, at) +α[rt+1+γQ(st+1, at+1)−Q(st, at)]. (19)\n10M. Toquebiau et al., An Introduction to Deep RL\nThis requires the experience of two successive steps. The Q-learning algorithm (Watkins, 1989) uses only one transition,\nusing the learnt action-value to select an action for the next step in the TD-target:\nQ(st, at)←Q(st, at) +αh\nrt+1+γmax\naQ(st+1, a)−Q(st, at)i\n. (20)",
+      "using the learnt action-value to select an action for the next step in the TD-target:\nQ(st, at)←Q(st, at) +αh\nrt+1+γmax\naQ(st+1, a)−Q(st, at)i\n. (20)\nThis update rule uses the current estimate Qas an approximation of the optimal Q∗to compute the Bellman error.\nThus, like in value iteration, Q-learning learns the action-value function of the greedy policy with respect to Q:\nπ(s) = arg maxaQ(s, a).\nFor Q-learning to effectively learn a good approximation of Q∗, the agent must visit all states of the environment\nenough times. Concretely, this means having a sampling policy that allows exploring all parts of the state space. One\nsuch exploration policy can be to select actions randomly, allowing the agent to try actions regardless of their current"
+    ],
+    "eval_notes": "Comparison across Chunks 60 and 61 (SARSA vs Q-learning)."
+  },
+  {
+    "id": "os7-08",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "multi_hop",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What advantages do disk drives have over main memory, and what are the two mechanical steps involved in accessing a block on a disk?",
+    "reference": "### **Key Advantages of Disk Drives Over Main Memory**\nDisk drives provide three critical advantages over main memory (RAM):\n- **Large Storage Capacity**: Disk drives provide massive storage volume (gigabytes to terabytes) compared to the limited capacity of RAM.\n- **Cost-Effectiveness**: Secondary storage offers a significantly lower cost per gigabyte of data stored than semiconductor main memory.\n- **Non-Volatile Storage**: Disks retain their stored data permanently, even when the computer system is powered down.\n\n### **The Two Mechanical Steps Involved in Accessing a Block on a Disk**\nAccording to Lecture 7, accessing a block on a disk involves two primary mechanical processes:\n1. **Rewind**: The actuator arm moves back to the starting point of the disk.\n2. **Seek**: The actuator arm and read/write head move across the disk cylinders to search for and locate the required block.",
+    "reference_contexts": [
+      "The head of computer Science department\nFaculty of Computer and Informatics \nSuez Canal University\nOperating System\nProf. Dr. Hassan Al -MahdiDEVICE \nMANAGEMENTINTRODUCTION TO DEVICE MANAGEMENT\n•Device  management  involves  \ncontrolling  input/output  devices,  \nensuring  efficient  communication  \nbetween  hardware  and the \noperating  system .\nINTRODUCTION TO DEVICE MANAGEMENT\n❖Input and output devices are classified into two categories:\n➢Block devices \n➢Character devices\nBLOCK DEVICES\n❖Store information in fixed -size blocks ( 128 bytes to 3024 bytes).\n❖Read/write operations are independent of others.\n❖Examples: Hard drives.\n❖Process:\n✓Rewind (actuator arm moves to disk start).\n✓Seek (searches for the required block).\nCHARACTER DEVICES",
+      "•Nearly all computers have disk drives.\n•Types: hard disk drives, CD -ROM drives.\n•Key advantages over main memory:\n✓Large storage capacity\n✓Cost-effectiveness\n✓Non-volatile storage.•Hard Disk Hardware Components\n•Hard Disk:\n•Multiple stacked disks forming a cylinder.\n•Tracks grouped into cylinders.\nDISKSHARD DISK STRUCTURE\n•Five main areas:\n•Partition Table\n•Boot Record\n•File Allocation Table (FAT)\n•Directory Structure\n•Data SpaceHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nSUMMARY\n•Device management enables smooth hardware -software interaction.\n•Block vs. Character devices.\n•Device controllers act as intermediaries.\n•DMA enhances performance by bypassing the CPU for data transfers."
+    ],
+    "eval_notes": "Multi-hop combining Chunks 0 and 4."
+  },
+  {
+    "id": "celery-04",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "multi_hop",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Is Celery included as part of Flask or is it installed separately, and what scope of tasks can it handle?",
+    "reference": "**Celery is not included as part of Flask**; it is an independent, separate Python package (`celery`) that must be installed separately (e.g., via `pip install celery`).\n\nRegarding the scope of tasks it can handle:\n- **Simple Background Tasks**: One-off asynchronous operations such as sending notification emails, processing file uploads, or resizing images without blocking web requests.\n- **Complex Multi-Stage Workflows**: Advanced distributed execution pipelines, including task chains, groups, chords, and complex dependency graphs.\n- **Scheduled & Periodic Tasks**: Recurring routines and scheduled automated jobs using Celery Beat.\n\nWhile installed separately, Celery can be easily configured and integrated within a Flask application to run background jobs seamlessly.",
+    "reference_contexts": [
+      "Celery Background Tasks — Flask Documentation (2.3.x): Celery is a powerful task queue that can be used for simple background tasks as well as complex multi-stage programs and schedules. This guide will show you how to configure Celery using Flask, but assumes you’ve already read the First Steps with Celery guide in the Celery documentation. Install ¶ Celery is a separate Python package."
+    ],
+    "eval_notes": "Multi-hop combining Chunks 1 and 2 (Flask docs + guide)."
+  },
+  {
+    "id": "rl-08",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "multi_hop",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "How does the Deep Recurrent Q-Network (DRQN) modify the original Deep Q-Network (DQN) architecture, and why?",
+    "reference": "The **Deep Recurrent Q-Network (DRQN)** (Hausknecht & Stone, 2015) modifies the original **Deep Q-Network (DQN)** architecture by introducing recurrence to maintain temporal memory:\n\n### **Architectural Modification**\n- **Original DQN (Mnih et al., 2015)**: Uses a series of convolutional layers to extract spatial features from input frames, followed directly by feedforward fully connected layers that output the estimated Q-value for each discrete action.\n- **DRQN (Hausknecht & Stone, 2015)**: Replaces the first fully connected layer after the convolutions with an **LSTM (Long Short-Term Memory)** recurrent neural network unit, which then feeds into the final action-value output layer.\n\n### **Why the Modification Was Introduced**\n- **Overcoming Partial Observability**: Standard DQN assumes full observability (MDP). In partially observable environments (POMDPs, e.g., flickering screens or masked game states), a single static frame does not provide complete state information.\n- **Integrating Information Across Time**: The recurrent LSTM unit maintains an internal hidden state across time steps, enabling the agent to integrate temporal information and maintain a memory of previous events to make better decisions.",
+    "reference_contexts": [
+      "(b) Deep Recurrent Q-Network\nFigure 5: DQN architectures. (a) The original DQN (Mnih et al., 2015), with a series of convolution layers that analyse\nthe input frame, followed by fully connected layers that output the value of each action. (b) Recurrent version of a\nDQN (Hausknecht & Stone, 2015), that adds an LSTM unit after the convolutions to allow some information to carry to\nfuture steps.\nIn the TD-target, the action is selected by the main network Qθand evaluated by the target network Qθ−.\nvan Hasselt et al. (2016) apply this idea to the DQN to improve its performance.\n•The Dueling DQN (Wang et al., 2016) proposes to decompose the action-value of an action Q(s, a)into\ntwo separate predictions: the value of the current state V(s)and the advantage of the action defined as"
+    ],
+    "eval_notes": "Ground truth in Chunk 95."
+  },
+  {
+    "id": "os7-01",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the two classifications of I/O devices according to OS Device Management, and how do their data access units differ?",
+    "reference": "According to **OS Device Management**, input/output (I/O) devices are classified into two primary categories:\n\n1. **Block Devices**:\n   - **Data Access Unit**: Store and transfer information in **fixed-size blocks**, typically ranging from **128 bytes to 3024 bytes**.\n   - **Access Characteristics**: Read and write operations on blocks are completely **independent of each other**, enabling random access to any block on the device.\n   - **Examples**: Hard disk drives and CD-ROM drives.\n   - **Access Process**: Involves physical mechanical steps: **Rewind** (actuator arm moves to disk start) and **Seek** (searches for the required block).\n\n2. **Character Devices (Serial Devices)**:\n   - **Data Access Unit**: Transfer and process data **sequentially, one character (byte) at a time**.\n   - **Access Characteristics**: Do not use block numbers or fixed block boundaries; data is accessed as a continuous, unaddressed character stream.\n   - **Examples**: Printers, punched tapes, network cards, and mice.\n\nIn summary, the key difference is that **block devices store and access data in independent, fixed-size blocks**, whereas **character devices process data sequentially one character at a time without block numbers**.",
+    "reference_contexts": [
+      "The head of computer Science department\nFaculty of Computer and Informatics \nSuez Canal University\nOperating System\nProf. Dr. Hassan Al -MahdiDEVICE \nMANAGEMENTINTRODUCTION TO DEVICE MANAGEMENT\n•Device  management  involves  \ncontrolling  input/output  devices,  \nensuring  efficient  communication  \nbetween  hardware  and the \noperating  system .\nINTRODUCTION TO DEVICE MANAGEMENT\n❖Input and output devices are classified into two categories:\n➢Block devices \n➢Character devices\nBLOCK DEVICES\n❖Store information in fixed -size blocks ( 128 bytes to 3024 bytes).\n❖Read/write operations are independent of others.\n❖Examples: Hard drives.\n❖Process:\n✓Rewind (actuator arm moves to disk start).\n✓Seek (searches for the required block).\nCHARACTER DEVICES",
+      "❖Examples: Hard drives.\n❖Process:\n✓Rewind (actuator arm moves to disk start).\n✓Seek (searches for the required block).\nCHARACTER DEVICES\n❖Data processed sequentially, one character at a time.\n❖Do not use block numbers.\n❖Examples: Printers, Punched tapes, Network cards, Mice.\n❖Also known as Serial Devices .\nDEVICE CONTROLLER\n1.Electronic  Components : a \nset of electronic  circuits  \nmounted  on a physical  board  \ncalled  the Device  Controller .\n•The device  controller  acts as \nan interface  between  the \ncomputer  and the mechanical  \npart of the external  device .\n2.Mechanical  Components : \nPhysical  device  (e.g., floppy  \ndisk) .\n❖An input  or output  device  consists  of two partsDEVICE CONTROLLER FUNCTIONS\n❖Interfaces with the processor and memory."
+    ],
+    "eval_notes": "Ground truth spans Chunks 0 and 1. Tests Block vs Character device definitions."
+  },
+  {
+    "id": "os7-02",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the two constituent parts of an I/O device, and what role does the device controller play?",
+    "reference": "An **input/output (I/O) device** consists of **two constituent parts**:\n\n1. **Electronic Components (Device Controller)**:\n   - A set of electronic circuits mounted on a physical circuit board called the **Device Controller**.\n2. **Mechanical Components (Physical Device)**:\n   - The physical hardware mechanism itself (e.g., the spinning magnetic platter, read/write heads, and motor of a floppy disk or hard drive).\n\n### **Role of the Device Controller**\nThe device controller plays a crucial role as the intermediary between the computer and the physical device:\n- **Interface**: Acts as an electronic interface between the computer (processor and memory) and the mechanical parts of the external device.\n- **Multi-Device & Port Standardization**: Provides standardized communication ports and can support multiple device types (such as hard disks and CDs).\n- **Buffering & Data Translation**: Directly controls the mechanical components, converts serial bit streams from the device into structured data buffers, and transfers buffered data to the processor, abstracting low-level hardware mechanics from the operating system.",
+    "reference_contexts": [
+      "❖Examples: Hard drives.\n❖Process:\n✓Rewind (actuator arm moves to disk start).\n✓Seek (searches for the required block).\nCHARACTER DEVICES\n❖Data processed sequentially, one character at a time.\n❖Do not use block numbers.\n❖Examples: Printers, Punched tapes, Network cards, Mice.\n❖Also known as Serial Devices .\nDEVICE CONTROLLER\n1.Electronic  Components : a \nset of electronic  circuits  \nmounted  on a physical  board  \ncalled  the Device  Controller .\n•The device  controller  acts as \nan interface  between  the \ncomputer  and the mechanical  \npart of the external  device .\n2.Mechanical  Components : \nPhysical  device  (e.g., floppy  \ndisk) .\n❖An input  or output  device  consists  of two partsDEVICE CONTROLLER FUNCTIONS\n❖Interfaces with the processor and memory."
+    ],
+    "eval_notes": "Ground truth in Chunk 1. Direct factual recall."
+  },
+  {
+    "id": "os7-03",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Does the Operating System interact directly with physical hardware devices? Explain the communication process.",
+    "reference": "**No**, the Operating System **does not directly interact** with physical hardware devices. Instead, all communication is mediated through the **device controller**.\n\n### **The Communication Process**\nThe interaction between the processor/OS and the device controller follows a structured three-step process:\n1. **Command Issuance**: The processor sends a high-level I/O command (such as a read command) to the device controller.\n2. **Buffering**: The device controller interprets the command, manages the physical device mechanics, and reads data **bit by bit** into its internal buffer.\n3. **Data Transfer**: Once the data is assembled in the buffer, it is transferred from the controller to the processor (or memory).\n\nThis layered architecture abstracts hardware differences and protects the operating system from having to manage mechanical device specifics directly.",
+    "reference_contexts": [
+      "disk) .\n❖An input  or output  device  consists  of two partsDEVICE CONTROLLER FUNCTIONS\n❖Interfaces with the processor and memory.\n❖Can support multiple device types (e.g., hard disks, CDs).\n❖Standardized ports for device communication.\nOPERATING SYSTEM & DEVICE CONTROLLER \nINTERACTION\n•OS does not directly interact with devices.\n•Communication process:\n•Processor sends read command.\n•Controller reads data bit by bit into a buffer.\n•Data is transferred to the processor.REGISTERS IN DEVICE CONTROLLER\n❖The device controller contains a set of registers  that facilitate \ncommunication with the processor.\n❖In some computer systems, these registers are mapped to specific addresses \nwithin the main memory ( I/O Memory Mapping )"
+    ],
+    "eval_notes": "Ground truth in Chunk 2."
+  },
+  {
+    "id": "os7-04",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is the difference between I/O Memory Mapping and Independent Addressing for device controller registers?",
+    "reference": "The difference between **I/O Memory Mapping** and **Independent Addressing** for device controller registers lies in how the registers are addressed and accessed by the processor:\n\n- **I/O Memory Mapping (Memory-Mapped I/O)**:\n  - Device controller registers are mapped directly to **specific addresses within the main memory** address space.\n  - The CPU accesses device registers using standard memory read and write instructions (e.g., `LOAD`, `STORE`), treating I/O registers identically to normal RAM locations.\n- **Independent Addressing (Port-Mapped / Isolated I/O)**:\n  - Device controller registers use a **separate, dedicated address space** that is completely independent of the main memory.\n  - The CPU uses special I/O machine instructions (e.g., `IN` and `OUT`) and distinct hardware control lines to read from and write to controller registers.\n\nIn summary, **I/O Memory Mapping integrates device registers into the main memory address space**, while **Independent Addressing keeps device registers in a separate, isolated I/O address space**.",
+    "reference_contexts": [
+      "disk) .\n❖An input  or output  device  consists  of two partsDEVICE CONTROLLER FUNCTIONS\n❖Interfaces with the processor and memory.\n❖Can support multiple device types (e.g., hard disks, CDs).\n❖Standardized ports for device communication.\nOPERATING SYSTEM & DEVICE CONTROLLER \nINTERACTION\n•OS does not directly interact with devices.\n•Communication process:\n•Processor sends read command.\n•Controller reads data bit by bit into a buffer.\n•Data is transferred to the processor.REGISTERS IN DEVICE CONTROLLER\n❖The device controller contains a set of registers  that facilitate \ncommunication with the processor.\n❖In some computer systems, these registers are mapped to specific addresses \nwithin the main memory ( I/O Memory Mapping )",
+      "❖In some computer systems, these registers are mapped to specific addresses \nwithin the main memory ( I/O Memory Mapping )  \n❖In other systems, these registers use separate addresses that are \nindependent of the main memory ( Independent Addressing).DIRECT MEMORY ACCESS (DMA)\n•Without DMA:\n•Controller reads data into a buffer.\n•OS retrieves data byte by byte \n(inefficient).\n•DMA Technique\n•Processor provides:\n1.Disk address.\n2.Number of bytes to read.\n3.Main memory starting address.\n•Controller transfers data directly \nto memory, freeing the \nprocessor.\n•Benefits of DMA\n•Reduces CPU workload.\n•Improves system efficiency.\n•Allows multitasking while data transfer occurs.DIRECT MEMORY ACCESS (DMA)DISKS\n•Nearly all computers have disk drives.\n•Types: hard disk drives, CD -ROM drives."
+    ],
+    "eval_notes": "Ground truth in Chunks 2 and 3."
+  },
+  {
+    "id": "os7-06",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the primary benefits of using Direct Memory Access (DMA)?",
+    "reference": "The primary benefits of using **Direct Memory Access (DMA)** in computer systems are:\n\n1. **Reduces CPU Workload**:\n   - Frees the processor from the burden of copying data byte by byte between device controllers and main memory.\n2. **Improves System Efficiency**:\n   - Enhances data transfer speeds and overall system throughput by transferring large data blocks directly across the bus at hardware speed.\n3. **Allows Multitasking**:\n   - Enables the CPU to continue executing user processes and computational tasks concurrently while the DMA controller manages data transfers in parallel.",
+    "reference_contexts": [
+      "❖In some computer systems, these registers are mapped to specific addresses \nwithin the main memory ( I/O Memory Mapping )  \n❖In other systems, these registers use separate addresses that are \nindependent of the main memory ( Independent Addressing).DIRECT MEMORY ACCESS (DMA)\n•Without DMA:\n•Controller reads data into a buffer.\n•OS retrieves data byte by byte \n(inefficient).\n•DMA Technique\n•Processor provides:\n1.Disk address.\n2.Number of bytes to read.\n3.Main memory starting address.\n•Controller transfers data directly \nto memory, freeing the \nprocessor.\n•Benefits of DMA\n•Reduces CPU workload.\n•Improves system efficiency.\n•Allows multitasking while data transfer occurs.DIRECT MEMORY ACCESS (DMA)DISKS\n•Nearly all computers have disk drives.\n•Types: hard disk drives, CD -ROM drives."
+    ],
+    "eval_notes": "Ground truth in Chunk 3."
+  },
+  {
+    "id": "os7-07",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the five main structural areas of a hard disk as outlined in Lecture 7?",
+    "reference": "As outlined in Lecture 7, the **five main structural areas** of a hard disk are:\n\n1. **Partition Table**: Stores information about how the physical storage drive is divided into logical partitions.\n2. **Boot Record**: Contains the initial bootstrap loader program required to start and load the operating system.\n3. **File Allocation Table (FAT)**: A table that records and tracks which disk clusters/blocks belong to each file.\n4. **Directory Structure**: Organizes and stores file metadata, directory hierarchies, and file names.\n5. **Data Space**: The primary storage area on the disk where the actual contents of files and user data reside.",
+    "reference_contexts": [
+      "•Nearly all computers have disk drives.\n•Types: hard disk drives, CD -ROM drives.\n•Key advantages over main memory:\n✓Large storage capacity\n✓Cost-effectiveness\n✓Non-volatile storage.•Hard Disk Hardware Components\n•Hard Disk:\n•Multiple stacked disks forming a cylinder.\n•Tracks grouped into cylinders.\nDISKSHARD DISK STRUCTURE\n•Five main areas:\n•Partition Table\n•Boot Record\n•File Allocation Table (FAT)\n•Directory Structure\n•Data SpaceHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nHARD DISK STRUCTURE\nSUMMARY\n•Device management enables smooth hardware -software interaction.\n•Block vs. Character devices.\n•Device controllers act as intermediaries.\n•DMA enhances performance by bypassing the CPU for data transfers."
+    ],
+    "eval_notes": "Ground truth in Chunk 4."
+  },
+  {
+    "id": "os7-09",
+    "material_id": "d7c4958b-7972-49e6-aeb0-934190a0172c",
+    "material_title": "OS - Lecture 7",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is the purpose of disk scheduling algorithms and what are the common categories of disk errors?",
+    "reference": "### **Purpose of Disk Scheduling Algorithms**\nThe primary purpose of **disk scheduling algorithms** in an operating system is to **optimize seek time**—minimizing the mechanical movement of the disk read/write head across tracks to maximize I/O throughput and reduce average access latency.\n\n### **Common Categories of Disk Errors**\nAs outlined in Lecture 7, common categories of disk errors include:\n1. **Programming Errors**: Software or driver faults where invalid commands or out-of-range parameters are issued to the controller.\n2. **Seek Errors**: Mechanical or head-positioning errors where the actuator arm fails to land on the correct track or cylinder.\n3. **Scheduler Errors**: Errors originating in the disk scheduling logic or request queues that lead to inefficient ordering or starvation.",
+    "reference_contexts": [
+      "•Block vs. Character devices.\n•Device controllers act as intermediaries.\n•DMA enhances performance by bypassing the CPU for data transfers.\n•Disks provide high -capacity, cost -effective, non -volatile storage.\n•Disk structure consists of partitions, boot records, and file allocation tables.\n•Scheduling algorithms optimize seek time.\n•Common disk errors include programming, seek, and scheduler errors."
+    ],
+    "eval_notes": "Ground truth in Chunk 5."
+  },
+  {
+    "id": "celery-01",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Why should a web application like Flask use a task queue for long-running operations?",
+    "reference": "A **task queue** in a web application like **Flask** is essential for handling **long-running operations** (such as processing uploaded data or sending emails) because:\n\n- **Prevents Blocking the Web Server**: In a standard HTTP request-response cycle, the client should not be kept waiting for time-consuming jobs to complete. Blocking the request degrades user experience and exhausts web worker threads.\n- **Asynchronous Background Execution**: A task queue offloads the operation by sending the required payload and parameters to a separate background process, allowing the web request to return an immediate response to the client.\n- **Improved Responsiveness & Throughput**: Decoupling long-running tasks allows the web application to remain fast, responsive, and available to handle high incoming traffic volume.",
+    "reference_contexts": [
+      "--- Web Search ---\nBackground Tasks with Celery — Flask Documentation (3.1.x): Background Tasks with Celery ¶ If your application has a long running task, such as processing some uploaded data or sending email, you don’t want to wait for it to finish during a request. Instead, use a task queue to send the necessary data to another process that will run the task in the background while the request returns immediately."
+    ],
+    "eval_notes": "Ground truth directly in Chunk 0. Strict RAG test: Faithfulness should be 1.0."
+  },
+  {
+    "id": "celery-02",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is Celery in Python and what core capabilities does it provide?",
+    "reference": "**Celery** is the most widely used **distributed task queue** for Python, designed to manage asynchronous, distributed workload processing.\n\nIt provides several **core capabilities**:\n- **Background Task Offloading**: Offloads time-consuming operations to background worker processes that run completely separately from the web server.\n- **Automatic Retries**: Provides built-in support for task retries with configurable exponential backoff and retry limits when transient failures occur.\n- **Task Scheduling (Periodic Tasks)**: Includes Celery Beat to execute scheduled, recurring cron-like tasks and periodic maintenance jobs.\n- **Horizontal Scaling**: Enables worker processes to be scaled horizontally across multiple instances, containers, or machines to handle large task volumes.",
+    "reference_contexts": [
+      "Celery and Python — A Practical Guide to Background Task ...: Sep 25, 2026 · Celery is the most widely used distributed task queue for Python. It lets you offload work to background workers that run separately from your web server, with support for retries, scheduling, and horizontal scaling."
+    ],
+    "eval_notes": "Ground truth directly in Chunk 1. Strict RAG test: Faithfulness should be 1.0."
+  },
+  {
+    "id": "celery-03",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "How does Celery handle queues when a queue name is not explicitly defined in the task_queues list?",
+    "reference": "When a queue name is not explicitly defined in the **`task_queues`** list, Celery handles queue creation and routing as follows:\n\n- **Explicit Queue Defined**: If the queue name is defined in **`task_queues`**, Celery uses that explicit configuration.\n- **Queue Not Defined in `task_queues`**: If the queue name is not defined in the list of queues, Celery's behavior is governed by the **`task_create_missing_queues`** setting:\n  - If **`task_create_missing_queues`** is set to `True` (the default setting), Celery will **automatically generate a new queue** dynamically with default exchange and routing settings.\n  - If set to `False`, attempting to route tasks to an undeclared queue will result in an error.",
+    "reference_contexts": [
+      "Celery and Background Tasks for Python Backends: Apr 28, 2026 · Home All Posts Python Celery and Background Tasks for Python Backends How to use Celery properly — brokers, workers, retries, idempotency, scheduling, and the patterns that don't bite you in production.\nWorkers Guide — Celery 5.6.3 documentation: If the queue name is defined in task_queues it will use that configuration, but if it’s not defined in the list of queues Celery will automatically generate a new queue for you (depending on the task_create_missing_queues option)."
+    ],
+    "eval_notes": "Ground truth in Chunk 3 (Workers Guide). Tests precision on technical config flags."
+  },
+  {
+    "id": "celery-05",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the essential architectural components and patterns needed to use Celery properly in production backends?",
+    "reference": "Using Celery properly in production backends requires configuring several **essential architectural components** and **operational patterns**:\n\n### **Core Architectural Components**\n1. **Message Broker**: An intermediary queue system (e.g., **RabbitMQ** or **Redis**) that reliably buffers, stores, and routes task messages between the web backend and workers.\n2. **Workers**: Independent background processes that consume task messages from the broker, execute the task logic, and manage process concurrency.\n3. **Task Queues**: Dedicated named queues configured in `task_queues` to isolate high-priority tasks from resource-heavy, long-running background jobs.\n\n### **Essential Operational Patterns**\n- **Retries with Backoff**: Configuring automatic retries with exponential backoff and jitter (`autoretry_for`, `retry_backoff`) for transient failures.\n- **Idempotency**: Ensuring all tasks are idempotent so duplicate executions caused by network retries or worker crashes do not produce unintended side effects.\n- **Scheduling**: Configuring Celery Beat for periodic cron-style tasks.\n- **Failure Handling**: Utilizing late acknowledgments (`acks_late`) and dead-letter queues to prevent lost tasks.",
+    "reference_contexts": [
+      "Celery and Background Tasks for Python Backends: Apr 28, 2026 · Home All Posts Python Celery and Background Tasks for Python Backends How to use Celery properly — brokers, workers, retries, idempotency, scheduling, and the patterns that don't bite you in production.\nWorkers Guide — Celery 5.6.3 documentation: If the queue name is defined in task_queues it will use that configuration, but if it’s not defined in the list of queues Celery will automatically generate a new queue for you (depending on the task_create_missing_queues option)."
+    ],
+    "eval_notes": "Ground truth in Chunk 3. Strict RAG test."
+  },
+  {
+    "id": "celery-10",
+    "material_id": "08f811e4-a8ea-48a4-857d-84d17b415ffd",
+    "material_title": "Python Celery",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What configuration setting in Celery controls whether missing queues are automatically created?",
+    "reference": "The configuration setting in Celery that controls whether missing queues are automatically created is **`task_create_missing_queues`**.\n\n- **When Set to `True` (Default)**: If a task specifies or routes to a queue name that is not explicitly declared in the **`task_queues`** configuration list, Celery will automatically generate and bind the new queue on the message broker dynamically.\n- **When Set to `False`**: Celery will not automatically create undeclared queues, raising an error if a task attempts to route to a queue that is not explicitly listed in **`task_queues`**.",
+    "reference_contexts": [
+      "Celery and Background Tasks for Python Backends: Apr 28, 2026 · Home All Posts Python Celery and Background Tasks for Python Backends How to use Celery properly — brokers, workers, retries, idempotency, scheduling, and the patterns that don't bite you in production.\nWorkers Guide — Celery 5.6.3 documentation: If the queue name is defined in task_queues it will use that configuration, but if it’s not defined in the list of queues Celery will automatically generate a new queue for you (depending on the task_create_missing_queues option)."
+    ],
+    "eval_notes": "Exact parameter verification from Chunk 3."
+  },
+  {
+    "id": "rl-01",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "How is the transition probability defined mathematically in a Markov Decision Process (MDP)?",
+    "reference": "In a **Markov Decision Process (MDP)**, the **transition probability function** defines the dynamics of the environment. Mathematically, it is defined as:\n\n\\[\np(s', r \\mid s, a) := \\Pr\\{s_{t+1} = s', r_{t+1} = r \\mid s_t = s, a_t = a\\}\n\\]\n\nwhere:\n- \\( s \\in \\mathcal{S} \\) is the current state,\n- \\( a \\in \\mathcal{A} \\) is the action executed by the agent,\n- \\( s' \\in \\mathcal{S} \\) is the next state, and\n- \\( r \\in \\mathcal{R} \\) is the scalar reward received.\n\nThis represents the joint probability of transitioning to state \\( s' \\) and receiving reward \\( r \\) after taking action \\( a \\) in state \\( s \\). In state-only transition formulations, marginalizing over all possible rewards yields:\n\n\\[\nT(s' \\mid s, a) = \\sum_{r \\in \\mathcal{R}} p(s', r \\mid s, a) = \\Pr\\{s_{t+1} = s' \\mid s_t = s, a_t = a\\}\n\\]",
+    "reference_contexts": [
+      "probability:\np(s′, r|s, a):=Pr{st+1=s′, rt+1=r|st=s, at=a}, (3)\nwhich is the probability of being in state s′∈Sand receiving reward r∈R, after performing action a∈Ain state\ns∈S.\n2.2 Modeling the Agent\nIn the context of an MDP, the agent is modelled as a policy that selects actions depending on the current state of\nthe environment. This policy can be either deterministic orstochastic . A deterministic policy is a function πthat\ndirectly maps the current state sto an action ato perform: π:S→A,π(s) =a. A stochastic policy πis defined as\na function that maps states to probabilities over possible actions: the probability of choosing action a∈Ain state s\nisπ(a|s)∈[0,1], withP\na∈Aπ(a|s) = 1 . In some algorithms, the policy is explicitly learnt during training. But the"
+    ],
+    "eval_notes": "Ground truth in Chunk 40. Strict mathematical recall."
+  },
+  {
+    "id": "rl-03",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is the definition of the state-value function V^pi(s) and how is the optimal policy pi* defined in terms of value functions?",
+    "reference": "### **Definition of the State-Value Function \\( V^\\pi(s) \\)**\nThe **state-value function** \\( V^\\pi(s) \\) under a policy \\( \\pi \\) is defined as the expected return starting from state \\( s \\) and following policy \\( \\pi \\) thereafter:\n\n\\[\nV^\\pi(s) := \\mathbb{E}_\\pi [G_t \\mid s_t = s]\n\\]\n\nExpressed recursively via the Bellman expectation equation:\n\n\\[\nV^\\pi(s) = \\mathbb{E}_\\pi [r_{t+1} + \\gamma V^\\pi(s') \\mid s_t = s, s_{t+1} = s']\n\\]\n\n### **Definition of the Optimal Policy \\( \\pi^* \\)**\nThe **optimal policy** \\( \\pi^* \\) is defined as the policy whose expected return is greater than or equal to that of all other possible policies across all states in the state space:\n\n\\[\nV^{\\pi^*}(s) \\geq V^{\\pi'}(s), \\quad \forall s \\in \\mathcal{S}, \\; \forall \\pi'\n\\]\n\nThe optimal policy \\( \\pi^* \\) is associated with the optimal value functions \\( V^* \\) and \\( Q^* \\), always selecting the action that maximizes expected return:\n\n\\[\n\\pi^*(s) = \u0007rg\\max_{a \\in \\mathcal{A}} Q^*(s, a)\n\\]",
+    "reference_contexts": [
+      "Vπ(s):=Eπ[Gt|st=s]\n=Eπ[rt+1+γGt+1|st=s]\n=Eπ[rt+1+γVπ(s′)|st=s, st+1=s′]. (10)\nTheoptimal policy is defined as the policy whose expected return is greater than or equal to that of all other possible\npolicies, for all possible states. In other words, a policy πis the optimal policy if Vπ(s)≥Vπ′(s), for all s∈Sand all\npossible other policies π′. The optimal policy, denoted π∗is associated with the optimal value functions V∗andQ∗.\nBy definition, the optimal policy always chooses the action with the largest expected return, which can be noted as:\nπ∗(s) = arg max\na∈AQ∗(s, a). (11)\nFollowing this, the optimal state-value function of any state sis equal to the maximum value of Q∗in this state:\nV∗(s) = max\na∈AQ∗(s, a)\n= max\na∈AEπ∗[Gt|st=s, at=a]\n= max\na∈AEπ∗[rt+1+γV∗(s′)|st=s, at=a, st+1=s′]. (12)"
+    ],
+    "eval_notes": "Ground truth in Chunk 45."
+  },
+  {
+    "id": "rl-04",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the two main purposes for learning value function estimates in reinforcement learning algorithms?",
+    "reference": "In reinforcement learning algorithms, value function estimates are learned for **two primary purposes**:\n\n1. **Policy Evaluation (Prediction)**:\n   - To evaluate a given, potentially unknown policy \\( \\pi \\) by estimating the expected return obtained when following that policy from any state.\n2. **Control (Policy Improvement)**:\n   - To explicitly learn an optimal decision-making strategy to control the agent, where the agent's policy is derived directly from the learned value function (e.g., choosing actions greedily with respect to \\( Q(s, a) \\)).\n\nIn both settings, algorithms iteratively learn estimates of the state-value function \\( V(s) \\) or action-value function \\( Q(s, a) \\) to solve prediction and control tasks.",
+    "reference_contexts": [
+      "different purposes:\n•First, to evaluate a given policy, which may be unknown, by estimating the expected return obtained following\nthis policy.\n•Second, to explicitly learn a strategy to control the agent, in which case the agent’s policy will be derived from\nthe learnt value function.\nIn both cases, the algorithms presented learn estimates of the value functions defined in the last section (see Equations 7\nand 8).\n3.1.1 Value Iteration\nA value function estimate can be learnt with the value iteration technique: an iterative process of gathering experience\nwith a given policy and improving the estimated value function. Value iteration turns the Bellman optimality equations\n(see Equation 13) into an update rule. That is, given a current value estimate V, we compute a better estimation based"
+    ],
+    "eval_notes": "Ground truth in Chunk 50."
+  },
+  {
+    "id": "rl-05",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is the TD update equation for the SARSA algorithm, and what transition tuple gives the algorithm its name?",
+    "reference": "### **TD Update Equation for the SARSA Algorithm**\nThe temporal-difference (TD) update equation for the **SARSA** algorithm is:\n\n\\[\nQ(s_t, a_t) \\leftarrow Q(s_t, a_t) + \u0007lpha \\left[ r_{t+1} + \\gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t) \right]\n\\]\n\nwhere:\n- \\( \u0007lpha \\) is the learning rate,\n- \\( \\gamma \\) is the discount factor,\n- \\( r_{t+1} + \\gamma Q(s_{t+1}, a_{t+1}) \\) is the **TD-target**,\n- \\( \\left[ r_{t+1} + \\gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t) \right] \\) is the **TD-error**.\n\n### **The Transition Tuple**\nThe algorithm derives its name from the 5-element transition experience tuple:\n\n\\[\n\\langle s_t, a_t, r_{t+1}, s_{t+1}, a_{t+1} \rangle\n\\]\n\nrepresenting **S**tate, **A**ction, **R**eward, next **S**tate, and next **A**ction. Because SARSA updates using the actual action \\( a_{t+1} \\) selected by the behavior policy, it is an **on-policy** algorithm.",
+    "reference_contexts": [
+      "reducing the impact of the bootstrapped value estimate.\n3.1.4 SARSA and Q-learning\nThe TD learning approach can be applied for learning action-value functions. In the SARSA algorithm (Rummery &\nNiranjan, 1994), a tuple ⟨st, at, rt+1, st+1, at+1⟩— giving its name to the algorithm — is used to compute the TD\nupdate rule:\nQ(st, at)←Q(st, at) +α[rt+1+γQ(st+1, at+1)−Q(st, at)]. (19)\n10M. Toquebiau et al., An Introduction to Deep RL\nThis requires the experience of two successive steps. The Q-learning algorithm (Watkins, 1989) uses only one transition,\nusing the learnt action-value to select an action for the next step in the TD-target:\nQ(st, at)←Q(st, at) +αh\nrt+1+γmax\naQ(st+1, a)−Q(st, at)i\n. (20)"
+    ],
+    "eval_notes": "Ground truth in Chunk 60."
+  },
+  {
+    "id": "rl-07",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What is the policy parameter update formula in the REINFORCE algorithm (Williams, 1992)?",
+    "reference": "In the **REINFORCE algorithm** (Williams, 1992), policy parameters \\( \theta \\) are updated by sampling complete trajectories according to the Policy Gradient Theorem:\n\n\\[\n\theta_{t+1} \\leftarrow \theta_t + \u0007lpha G_t \frac{\nabla_\theta \\pi_\theta(a_t \\mid s_t)}{\\pi_\theta(a_t \\mid s_t)}\n\\]\n\nEquivalently, applying the log-derivative trick (\\( \nabla \\ln x = \frac{\nabla x}{x} \\)), the update rule is written as:\n\n\\[\n\theta_{t+1} \\leftarrow \theta_t + \u0007lpha G_t \nabla_\theta \\ln \\pi_\theta(a_t \\mid s_t)\n\\]\n\nwhere:\n- \\( \u0007lpha \\) is the learning rate,\n- \\( G_t \\) is the empirical discounted return observed from time step \\( t \\),\n- \\( \nabla_\theta \\pi_\theta(a_t \\mid s_t) \\) is the policy gradient indicating the direction in parameter space that most increases the probability of selecting action \\( a_t \\) in state \\( s_t \\),\n- Scaling by \\( G_t \\) increases the probability of actions that yield positive returns while reducing the probability of actions that lead to poor returns.",
+    "reference_contexts": [
+      "gradient as:\n∇J(θ) =Eπθ\u0014\nGs,a∇πθ(a|s)\nπθ(a|s)\u0015\n. (27)\nThe algorithm REINFORCE (Williams, 1992) approximates this expectation by sampling many trajectories, updating\nthe parameters θwith:\nθt+1←θt+αGt∇πθ(at|st)\nπθ(at|st), (28)\nfor any state stand action atfrom which the agent has experienced the return Gt. In this update, the gradient of the\npolicy indicates the direction, in parameter space, that most increases the probability of choosing action at. By taking\nthe product of this gradient with the return Gt, this update increases the probability of actions depending on the returns\nthey generate. Positive returns will result in an increase in the corresponding action probabilities, with the increase"
+    ],
+    "eval_notes": "Ground truth in Chunk 75."
+  },
+  {
+    "id": "rl-09",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "Why was the Deep Deterministic Policy Gradient (DDPG) algorithm introduced, and how does it extend DQN?",
+    "reference": "The **Deep Deterministic Policy Gradient (DDPG)** algorithm (Lillicrap et al., 2015) was proposed to extend deep reinforcement learning to **continuous action spaces**, overcoming a fundamental limitation of DQN:\n\n### **Why DDPG Was Introduced**\n- **DQN's Discrete Limitation**: Standard DQN requires computing \\( \\max_{a} Q(s, a) \\) to choose actions and evaluate TD-targets. In continuous action spaces with high dimensions, finding the global maximum over continuous variables at every time step is computationally intractable.\n\n### **How DDPG Extends DQN**\nDDPG adapts the actor-critic framework using deep neural networks while incorporating DQN's stabilization mechanisms:\n- **Actor-Critic Structure**:\n  - **Actor**: Learns a deterministic policy function \\( \\pi_\theta(s) \\) that directly maps continuous states to continuous action vectors.\n  - **Critic**: Learns an action-value function \\( Q_\\phi(s, a) \\) that evaluates the actions chosen by the actor.\n- **DQN Stabilization Techniques**:\n  - Uses an **Experience Replay Buffer** to break correlations between sequential samples.\n  - Uses **Target Networks** for both policy (\\( \\pi_{\theta^-} \\)) and value (\\( Q_{\\phi^-} \\)) functions to stabilize the Mean Squared Bellman Error (MSBE) loss computation.",
+    "reference_contexts": [
+      "Following the introduction of the DQN, similar ideas were implemented to extend actor-critics with deep learning. The\nDeep Deterministic Policy Gradient (DDPG; Lillicrap et al., 2015) was proposed to extend the DQN to work with\ncontinuous actions. Like in the original DPG (see Section 3.2.3), a deterministic policy function πθis learnt to select\nactions in a continuous space and an action-value function Qϕis used to evaluate the selected actions. Here, both of\nthese are modelled using deep neural networks. As in Double Q-learning (see Section 4.1.2), both the policy and value\nfunctions are doubled with target functions πθ−andQϕ−, respectively. The targets are used to compute the TD-target\nfor computing the MSBE loss:\nL(Θ) = E⟨s,a,r,s′⟩∼Bh\nr+γQϕ−(s′, πθ−(s′))−Qϕ(s, a)\u00012i\n. (40)"
+    ],
+    "eval_notes": "Ground truth in Chunk 100."
+  },
+  {
+    "id": "rl-10",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "How are target network parameters updated in DDPG, and what problem in Q-learning does TD3 address?",
+    "reference": "### **Target Network Parameter Updates in DDPG**\nIn DDPG, the target network parameters \\( \\Theta^- = \\{\theta^-, \\phi^-\\} \\) (for the actor and critic target networks) are initialized as copies of the online network parameters \\( \\Theta = \\{\theta, \\phi\\} \\). They are updated slowly toward the online networks using a **soft update (Polyak averaging)**:\n\n\\[\n\\Theta^- \\leftarrow \tau \\Theta + (1 - \tau) \\Theta^-, \\quad \text{with } 0 < \tau \\ll 1\n\\]\n\nThis gradual tracking prevents the target values from changing rapidly, significantly improving training stability and preventing divergence.\n\n### **Problem in Q-Learning Addressed by TD3**\nFujimoto et al. (2018) pointed out that DDPG, like all Q-learning methods, suffers from severe **overestimation of action-values** caused by function approximation errors when computing Bellman optimization objectives. While Double Q-learning helps in discrete domains, it does not fully solve it in continuous actor-critics. **Twin Delayed DDPG (TD3)** was introduced specifically to address and mitigate this overestimation bias.",
+    "reference_contexts": [
+      "for computing the MSBE loss:\nL(Θ) = E⟨s,a,r,s′⟩∼Bh\nr+γQϕ−(s′, πθ−(s′))−Qϕ(s, a)\u00012i\n. (40)\nThe target parameters Θ−={θ−, ϕ−}are initialised as copies of the main parameters Θand later slowly moved\ntowards the main networks with a \"soft\" update: Θ−←τΘ−+ (1−τ)Θ, with 0< τ≪1.\nFujimoto et al. (2018) pointed out that DDPG, as all Q-learning methods, suffers from an overestimation of action-values\ninduced by using a bad value estimate for computing the optimisation objective. While Double Q-learning helps address\nthis issue, it does not completely solve it. They propose an extension of DDPG, named Twin Delayed DDPG (TD3),\nthat better mitigates the overestimation problem with three tricks:"
+    ],
+    "eval_notes": "Ground truth in Chunk 101."
+  },
+  {
+    "id": "rl-11",
+    "material_id": "b687f0f3-b56c-4c4d-a5fe-eb911f134753",
+    "material_title": "Reinforcment Learning",
+    "question_type": "factoid",
+    "expected_pipeline_path": "strict_rag",
+    "user_input": "What are the three core mechanisms (tricks) introduced in the TD3 algorithm to mitigate value overestimation?",
+    "reference": "The **Twin Delayed DDPG (TD3)** algorithm introduces **three core mechanisms (tricks)** to mitigate value overestimation and stabilize training:\n\n1. **Twin Action-Value Functions (Twin)**:\n   - TD3 learns **two separate action-value networks** (\\( Q_{\\phi_1} \\) and \\( Q_{\\phi_2} \\)) and uses the **smaller (minimum)** value of the two when computing the TD-target:\n     \\[\n     y = r + \\gamma \\min_{i=1,2} Q_{\\phi_i^-}(s', \tilde{a}')\n     \\]\n   - Taking the minimum prevents positive estimation bias from accumulating over updates.\n\n2. **Delayed Policy Updates (Delayed)**:\n   - The policy (actor) network is updated **less frequently** than the action-value (critic) networks (e.g., one policy update for every two value updates).\n   - This ensures the value function has stabilized before using it to update the policy.\n\n3. **Target Policy Smoothing**:\n   - Small, clipped random noise is added to the target policy action when computing the TD-target:\n     \\[\n     \tilde{a}' = \text{clip}\\left(\\pi_{\theta^-}(s') + \text{clip}(\\epsilon, -c, c), a_{\text{low}}, a_{\text{high}}\right)\n     \\]\n   - This prevents the policy from overfitting to narrow, non-smooth spikes in the action-value function.",
+    "reference_contexts": [
+      "that better mitigates the overestimation problem with three tricks:\n•First ( Twin ), TD3 learns two action-value functions instead of one and uses the smaller values of the two when\ncomputing the TD-target.\n•Second ( Delayed ), the policy function is trained less often than the action-value functions (one policy update\nfor every two value updates) to make the policy less prone to value errors.\n•Third, the value estimates are smoothed by adding a small clipped noise on the target policy actions when\ncomputing the TD-target. This prevents having high spikes of value on some particular actions that the\ndeterministic policy would then overfit to.\nTherefore, TD3 computes the TD-target by taking the minimum value given by the twin DQNs and adding the clipped\nnoise to the policy’s action:"
+    ],
+    "eval_notes": "Ground truth in Chunk 102."
+  }
+]

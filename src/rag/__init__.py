@@ -2,6 +2,11 @@
 Study-Buddy RAG package with integrated Corrective RAG (CRAG).
 """
 
+import os
+os.environ.setdefault("USE_TORCH", "1")
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
 from src.rag.config import Settings, settings
 from src.rag.constants import (
     DEFAULT_MAX_RETRIES,

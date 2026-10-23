@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
+import { supabase, getAuthRedirectUrl } from '@/lib/supabase'
 
 const features = [
   {
@@ -65,7 +65,7 @@ export default function SignUpPage() {
 
     setIsLoading(true)
     try {
-      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : undefined
+      const redirectTo = getAuthRedirectUrl('/auth/callback')
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,

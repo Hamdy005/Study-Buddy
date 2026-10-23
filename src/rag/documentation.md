@@ -46,9 +46,9 @@ graph TD;
 	retrieve --> normalize;
 	normalize --> merge_pool;
 	merge_pool --> rerank;
-	rerank -.->|top_score >= 0.8| generate;
-	rerank -.->|0.2 < score < 0.8| evaluator;
-	rerank -.->|top_score <= 0.2| retry_check;
+	rerank -.->|top_score >= 0.65| generate;
+	rerank -.->|0.30 < score < 0.65| evaluator;
+	rerank -.->|top_score <= 0.30| retry_check;
 	evaluator -.->|correct| generate;
 	evaluator -.->|ambiguous / incorrect| retry_check;
 	retry_check -.->|retries <= 2| router;
@@ -76,12 +76,12 @@ The pipeline processes user queries through three distinct pathways:
    - `retrieve` executes external tool queries (Supabase vector store, Wikipedia, ArXiv, Web).
    - `normalize` cleans text into structured `Chunk` objects and computes SHA-256 content IDs.
    - `merge_pool` deduplicates passages and merges them into the cumulative pool.
-   - `rerank` scores chunks using a cross-encoder (`jina-reranker-v2-base-multilingual`), pinning top Supabase passages.
-   - If top reranker score $\ge 0.8$ (`HIGH_THRESHOLD`), `score_gate` short-circuits directly to `generate` (skipping the evaluator LLM call).
+   - If top reranker score $\ge 0.65$ (`HIGH_THRESHOLD`) on simple queries, `score_gate` short-circuits directly to `generate` (skipping the evaluator LLM call).
    - `generate` drafts an educational answer strictly cited with chunk numbers `[n]`.
 
 3. **Evaluation & Corrective Feedback Loop**:
-   - If rerank score is between $0.2$ and $0.8$, `evaluator` inspects relevance and coverage (`correct`, `ambiguous`, `incorrect`).
+   - For simple queries with score between $0.30$ and $0.65$, or complex queries with score $> 0.30$, `evaluator` inspects relevance and coverage (`correct`, `ambiguous`, `incorrect`).
+   - If rerank score is $\le 0.30$ (`LOW_THRESHOLD`), `score_gate` routes directly to `retry_check`.
    - If evaluated as `correct`, proceeds to `generate`.
    - If `ambiguous` or `incorrect`, `retry_check` tracks attempt count.
    - If `retries <= MAX_RETRIES (2)`, loops back to `router` to re-query (`bad_query` rewrites query targeting `missing`; sources remain fixed with no tool escalation).
@@ -129,9 +129,14 @@ The pipeline processes user queries through three distinct pathways:
   - `tool_queries`: mapping of source to specific search query
 
 ### 6. `retrieve`
-- **Purpose**: Calls registered tool functions concurrently across designated sources.
+- **Purpose**: Calls registered tool functions concurrently across designated sources with intent- and retry-aware dynamic timeouts:
+  - **Base timeout**: `7.0s` (`TOOL_TIMEOUT_SIMPLE_S`) for simple queries, `13.0s` (`TOOL_TIMEOUT_COMPLEX_S`) for complex queries.
+  - **Progressive timeout escalation for empty context (`context == []`)**:
+    - `retries == 1`: tool timeout escalates to `16.0s` (`TOOL_TIMEOUT_RETRY1_EMPTY_S`).
+    - `retries == 2`: tool timeout escalates to `25.0s` (`TOOL_TIMEOUT_RETRY2_EMPTY_S`).
 - **Output fields**:
   - `raw_results`: raw documents/payloads returned by tool APIs
+  - `all_retrievers_failed`: boolean indicating whether all tool retrievers failed/timed out
 
 ### 7. `normalize`
 - **Purpose**: Parses varied tool response formats, splits text into target chunk lengths, and computes deterministic content hashes.
@@ -186,12 +191,12 @@ The pipeline processes user queries through three distinct pathways:
 
 - **`score_gate`**:
   - **For Simple Queries (`intent == "simple"`)**:
-    - `top_score > SIMPLE_THRESHOLD (0.35)` $\rightarrow$ `generate` (bypasses evaluator entirely to eliminate token waste).
-    - `top_score <= SIMPLE_THRESHOLD (0.35)` $\rightarrow$ `retry_check` $\rightarrow$ retries with **all tools** (`supabase`, `arxiv`, `wikipedia`, `web`) using keyword-style search queries.
+    - `top_score >= HIGH_THRESHOLD (0.65)` $\rightarrow$ `generate` (high confidence single-concept shortcut, skips evaluator).
+    - `LOW_THRESHOLD (0.30) < top_score < HIGH_THRESHOLD (0.65)` $\rightarrow$ `evaluator` (ambiguous zone, LLM verifies relevance).
+    - `top_score <= LOW_THRESHOLD (0.30)` $\rightarrow$ `retry_check` $\rightarrow$ retries with **all tools** (`supabase`, `arxiv`, `wikipedia`, `web`) using keyword-style search queries.
   - **For Complex Queries (`intent == "complex"`)**:
-    - `top_score >= HIGH_THRESHOLD (0.8)` $\rightarrow$ `generate` (high confidence shortcut)
-    - `top_score <= LOW_THRESHOLD (0.2)` $\rightarrow$ `retry_check` (immediate retry)
-    - `LOW_THRESHOLD < top_score < HIGH_THRESHOLD` $\rightarrow$ `evaluator` (ambiguous zone inspection)
+    - `top_score <= LOW_THRESHOLD (0.30)` $\rightarrow$ `retry_check` (immediate retry, context too weak).
+    - `top_score > LOW_THRESHOLD (0.30)` $\rightarrow$ `evaluator` (ALWAYS verifies that ALL sub-parts are satisfied).
 
 - **`evaluator_gate`**:
   - `verdict == "correct"` $\rightarrow$ `generate`
@@ -203,15 +208,25 @@ The pipeline processes user queries through three distinct pathways:
 
 ---
 
-## 5. Key Configuration & Constants
+## 5. Model Architecture & Tier Assignment
+
+CRAG employs a high-efficiency 8B / 14B split tailored to the specific latency and reasoning requirements of each graph node, powered directly by Mistral AI:
+
+| Node / Role | Model Tier | Why |
+| :--- | :--- | :--- |
+| **triage, reply_chitchat, reply_refusal, router** (re-query formatting) | `ministral-8b-latest` | Fast, lightweight classification calls where low latency (<1s) matters more than heavy parameter capacity. |
+| **tool_selector** (agentic tool routing in router/retrieve), **evaluator**, **generate**, **fallback** | `ministral-14b-latest` | 14-billion parameter reasoning model with native tool-calling, Pydantic structured output, and high-fidelity cited generation. |
+
+---
+
+## 6. Key Configuration & Constants
 
 All runtime thresholds and parameters are defined in `src/rag/constants.py` and validated via Pydantic in `src/rag/config.py`:
 
 | Parameter | Default | Purpose / Behavior |
 | :--- | :--- | :--- |
-| `HIGH_THRESHOLD` | `0.8` | Quality cutoff. If top rerank score $\ge 0.8$, skips evaluator and answers immediately. |
-| `LOW_THRESHOLD` | `0.2` | Minimum viability floor for complex queries. If top score $\le 0.2$, skips evaluator and triggers corrective search. |
-| `SIMPLE_THRESHOLD` | `0.35` | Quality cutoff floor for simple queries. If top score $> 0.35$, bypasses evaluator and generates; otherwise retries. |
+| `HIGH_THRESHOLD` | `0.65` | Quality cutoff. If top rerank score $\ge 0.65$ on simple queries, skips evaluator and answers immediately. |
+| `LOW_THRESHOLD` | `0.30` | Minimum viability floor. If top score $\le 0.30$, skips evaluator and triggers corrective search. |
 | `KEEP_THRESHOLD` | `0.5` | Threshold for carrying over candidate chunks into subsequent retry pools. |
 | `MAX_RETRIES` | `2` | Maximum corrective search iterations before falling back to graceful synthesis. |
 | `TOP_K` | `5` | Base number of chunks retrieved per tool call. |
@@ -220,6 +235,18 @@ All runtime thresholds and parameters are defined in `src/rag/constants.py` and 
 | `POOL_MAX` | `50` | Hard cap on total deduped candidate chunks retained in pool across passes. |
 | `CARRY_MAX` | `4` | Maximum high-scoring chunks carried forward across retry iterations. |
 | `TRIAGE_TIMEOUT_S` | `15.0` | Max timeout allowed for Tier 1 triage classification before failing to complex path. |
+| `TOOL_TIMEOUT_SIMPLE_S` | `7.0` | Default timeout for tool retrieval calls on simple queries. |
+| `TOOL_TIMEOUT_COMPLEX_S` | `13.0` | Default timeout for tool retrieval calls on complex queries. |
+| `TOOL_TIMEOUT_RETRY1_EMPTY_S` | `16.0` | Escalated tool timeout on retry 1 when context pool is empty. |
+| `TOOL_TIMEOUT_RETRY2_EMPTY_S` | `25.0` | Escalated tool timeout on retry 2 when context pool remains empty. |
 | `MAX_SUBQUERIES` | `3` | Upper bound on sub-queries generated for complex multi-part questions. |
-| `LLM_MODEL` | `ministral-8b-latest` | Default primary LLM for triage, evaluation, and final generation. |
-| `RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Via Jina API Key (Tier 1 cascade) |
+| `TRIAGE_MODEL` | `ministral-8b-latest` | Fast classifier for intent triage and canned chitchat/refusal. |
+| `ROUTER_MODEL` | `ministral-8b-latest` | Fast model for router re-query keyword formulation. |
+| `TOOL_SELECTOR_MODEL`| `ministral-14b-latest` | Mistral 14B for high-fidelity agentic tool selection. |
+| `EVALUATOR_MODEL` | `ministral-14b-latest` | Mistral 14B for structured context evaluation. |
+| `GENERATOR_MODEL` | `ministral-14b-latest` | Mistral 14B for rigorous educational answer generation. |
+| `FALLBACK_MODEL` | `ministral-14b-latest` | Mistral 14B for graceful fallback answer generation. |
+| `RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Via Jina API Key (Tier 1 cascade). |
+
+
+

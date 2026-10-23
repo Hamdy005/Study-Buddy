@@ -20,6 +20,8 @@ from src.rag.constants import (
     FALLBACK_SYSTEM_PROMPT,
     GENERATE_HYBRID_PROMPT,
     GENERATE_SYSTEM_PROMPT,
+    GENERATE_MAX_TOKENS,
+    HYBRID_MAX_TOKENS,
     MAX_CHUNK_CHARS,
     MAX_QUESTION_LEN,
     MIN_QUESTION_LEN,
@@ -31,8 +33,12 @@ from src.rag.constants import (
     TOOL_TIMEOUT_SECONDS,
     DEFAULT_TOOL_TIMEOUT_SIMPLE_S,
     DEFAULT_TOOL_TIMEOUT_COMPLEX_S,
-    DEFAULT_SIMPLE_THRESHOLD,
+    DEFAULT_TOOL_TIMEOUT_RETRY1_EMPTY_S,
+    DEFAULT_TOOL_TIMEOUT_RETRY2_EMPTY_S,
+    DEFAULT_CHUNK_FLOOR,
+    DEFAULT_MAX_RETRIES,
     TOPIC_HINTS,
+    is_arxiv_query,
     WIKI_TOP_K_RESULTS,
     ARXIV_TOP_K_RESULTS,
     DUCKDUCKGO_NUM_RESULTS,
@@ -124,6 +130,7 @@ async def _run_langchain_tool_selector(
     material_id: str | None = None,
     topic: str | None = None,
     chat_history: list[dict[str, Any]] | None = None,
+    router_llm: Any = None,
 ) -> tuple[list[Source], dict[str, str]]:
     """
     Automatic tool selector on pass 0 using LangChain bind_tools from src.rag.rag.
@@ -141,15 +148,19 @@ async def _run_langchain_tool_selector(
         # Give LLM access to all search tools
         tools = _make_search_tools(is_topic=True)
         
-        try:
-            router_llm = get_rag_router_llm()
-        except Exception:
-            router_llm = get_summary_llm()
+        target_llm = router_llm
+        if target_llm is None:
+            try:
+                target_llm = get_rag_router_llm()
+            except Exception:
+                target_llm = get_summary_llm()
+        elif hasattr(target_llm, "_get_chat_model"):
+            target_llm = target_llm._get_chat_model()
 
         topic_info = f"\nTopic is: {topic}\n" if topic else ""
         history_info = f"\nRecent conversation context:\n{format_chat_history(chat_history, limit=8)}\n" if chat_history else ""
 
-        llm_with_tools = router_llm.bind_tools(tools)
+        llm_with_tools = target_llm.bind_tools(tools)
         messages = [
             SystemMessage(content=(
                 "You are an expert AI educational research router.\n"
@@ -185,18 +196,17 @@ async def _run_langchain_tool_selector(
                     selected_sources.append("web")
                 tool_queries["web"] = sub_query
             elif name == "arxiv_search":
-                if "arxiv" not in selected_sources:
-                    selected_sources.append("arxiv")
-                tool_queries["arxiv"] = sub_query
+                if is_arxiv_query(query, topic):
+                    if "arxiv" not in selected_sources:
+                        selected_sources.append("arxiv")
+                    tool_queries["arxiv"] = sub_query
 
     except Exception as exc:
         logger.debug(f"[router] Automatic LangChain tool selector skipped or failed: {exc}")
 
     # Fallback if no external tools selected for a topic
     if not selected_sources and not material_id:
-        academic_keywords = {"llm", "lora", "quantum", "model", "neural", "transformer", "algorithm", "deep learning", "ai", "physics", "math", "genomics", "arxiv", "bellman", "reinforcement"}
-        q_lower = query.lower()
-        if any(kw in q_lower for kw in academic_keywords):
+        if is_arxiv_query(query, topic):
             selected_sources = ["arxiv", "web"]
             tool_queries["arxiv"] = query
             tool_queries["web"] = query
@@ -522,6 +532,7 @@ def create_init_state_node() -> Callable[[GraphState], Any]:
 
 def create_router_node(
     llm: LLM | None = None,
+    tool_selector_llm: Any = None,
     settings: Settings | None = None,
 ) -> Callable[[GraphState], Any]:
     """
@@ -547,9 +558,12 @@ def create_router_node(
             sub_questions = state.get("sub_questions", [])
             material_id = state.get("material_id")
 
-            # 1. Complex query: use ALL tools concurrently!
+            # 1. Complex query: topic-based concurrent tools (never route engineering/framework to arxiv)
             if intent == "complex":
-                pass0_sources: list[Source] = ["supabase", "arxiv", "wikipedia", "web"]
+                topic = state.get("topic")
+                pass0_sources: list[Source] = ["supabase", "wikipedia", "web"]
+                if is_arxiv_query(original_q, topic):
+                    pass0_sources.insert(1, "arxiv")
                 q_list = sub_questions if sub_questions else [original_q]
                 chosen_query = q_list[0] if q_list else original_q
                 tool_queries = {s: chosen_query for s in pass0_sources}
@@ -558,11 +572,11 @@ def create_router_node(
                     tracer.log_node(
                         name="node/router",
                         run_type="chain",
-                        inputs={"original_q": original_q, "pass": 0, "mode": "complex_all_tools"},
+                        inputs={"original_q": original_q, "pass": 0, "mode": "complex_tools"},
                         outputs={"sources_to_use": pass0_sources, "search_query": chosen_query, "tool_queries": tool_queries},
                         latency_ms=latency_ms,
                     )
-                _log_node("router", state, decision=f"pass_0 (complex -> all_tools) -> {pass0_sources}", latency_ms=f"{latency_ms:.1f}")
+                _log_node("router", state, decision=f"pass_0 (complex) -> {pass0_sources}", latency_ms=f"{latency_ms:.1f}")
                 return {
                     "sources_to_use": pass0_sources,
                     "search_query": chosen_query,
@@ -573,13 +587,22 @@ def create_router_node(
             topic = state.get("topic")
             chat_history = state.get("chat_history", [])
             auto_sources, tool_queries = await _run_langchain_tool_selector(
-                original_q, material_id=material_id, topic=topic, chat_history=chat_history
+                original_q,
+                material_id=material_id,
+                topic=topic,
+                chat_history=chat_history,
+                router_llm=tool_selector_llm,
             )
             if auto_sources:
                 latency_ms = (time.perf_counter() - t0) * 1000
+                selector_model = (
+                    getattr(tool_selector_llm, "model_name", None)
+                    or getattr(tool_selector_llm, "model", None)
+                    or getattr(cfg, "TOOL_SELECTOR_MODEL", "mistral-medium-latest")
+                )
                 if tracer:
                     tracer.log_llm_call(
-                        model=cfg.LLM_MODEL,
+                        model=selector_model,
                         prompt_text=f"User query to research: '{original_q}'",
                         model_settings={"temperature": 0.0},
                         usage=getattr(llm_instance, "last_usage", None),
@@ -622,20 +645,39 @@ def create_router_node(
         retry_reason = "requery"
         intent = state.get("intent", "simple")
         topic = state.get("topic")
+        material_id = state.get("material_id")
         chat_history = state.get("chat_history", [])
+        missing_topics: list[str] = state.get("missing_topics") or []
         topic_info = f"<topic>Topic is: {topic}</topic>\n" if topic else ""
         history_info = f"<conversation_history>\n{format_chat_history(chat_history, limit=8)}\n</conversation_history>\n"
-        logger.info(f"[router] Retry pass {retries}: reason='requery' (missing='{missing}', intent='{intent}', topic='{topic}')")
-        
-        # For simple query retry (score was <= simple threshold):
+        logger.info(
+            f"[router] Retry pass {retries}: reason='requery' "
+            f"(missing='{missing}', missing_topics={missing_topics}, intent='{intent}', topic='{topic}')"
+        )
+
+        # Requery candidate sources:
+        # Include all applicable candidate tools so that when the query is rewritten into
+        use_arxiv = is_arxiv_query(original_q, topic)
+        sources_to_use: list[Source] = ["wikipedia", "web"]
+        if material_id:
+            sources_to_use.insert(0, "supabase")
+        if use_arxiv:
+            sources_to_use.append("arxiv")
+
+        # Build the missing description for the prompt.
+        # When the evaluator produced a structured list of topic gaps, join them so
+        # the LLM can write a query targeting ALL the specific unsatisfied sub-parts.
+        if missing_topics:
+            missing_for_prompt = "; ".join(missing_topics)
+        else:
+            missing_for_prompt = missing or "additional context needed"
+
+        # For simple query retry (score was <= LOW_THRESHOLD):
         if intent == "simple":
-            # Must retry with ALL tools instead of auto select, with a keyword-style search query
-            sources_to_use: list[Source] = ["supabase", "arxiv", "wikipedia", "web"]
-            simple_thresh = getattr(cfg, "SIMPLE_THRESHOLD", DEFAULT_SIMPLE_THRESHOLD)
             user_msg = (
                 f"<original_question>{original_q}</original_question>\n"
                 f"<previous_query>{state.get('search_query', original_q)}</previous_query>\n"
-                f"<missing>{missing or f'Re-rank score was below simple threshold ({simple_thresh}); need targeted factual keywords.'}</missing>\n"
+                f"<missing>{missing_for_prompt or f'Re-rank score was below threshold ({cfg.LOW_THRESHOLD}); need targeted factual keywords.'}</missing>\n"
                 f"<retry_number>{retries}</retry_number>"
             )
             prompt = (
@@ -643,7 +685,7 @@ def create_router_node(
                 f"{topic_info}"
                 f"{history_info}"
                 f"{user_msg}\n\n"
-                f"Rewrite this simple question into concise, keyword-style search terms optimized for arXiv and search engines "
+                f"Rewrite this simple question into concise, keyword-style search terms optimized for search engines "
                 f"(remove conversational phrases and question frames; extract 3 to 6 high-value search keywords). "
                 f"If the question refers to 'our topic', 'the topic', or uses ambiguous pronouns (it, they, he, she, this, that, its), "
                 f"resolve it using the topic name and conversation history to formulate search keywords for that concrete topic.\n"
@@ -651,12 +693,17 @@ def create_router_node(
                 f"SEARCH_QUERY: <keyword1 keyword2 ...>"
             )
         else:
-            # Complex query: keep existing sources as before
-            sources_to_use = list(state.get("sources_to_use") or ["supabase", "arxiv", "wikipedia", "web"])
+            # Complex query — when we have specific topic gaps, ask the LLM to target them all
+            missing_instruction = (
+                "Write a focused search query that addresses ALL of the listed missing sub-topics. "
+                "Combine the most important keywords from each gap into one high-precision query."
+                if missing_topics else
+                "Write a focused search query targeting the missing information."
+            )
             user_msg = (
                 f"<original_question>{original_q}</original_question>\n"
                 f"<previous_query>{state.get('search_query', original_q)}</previous_query>\n"
-                f"<missing>{missing or 'additional context needed'}</missing>\n"
+                f"<missing>{missing_for_prompt}</missing>\n"
                 f"<retry_number>{retries}</retry_number>"
             )
             prompt = (
@@ -664,7 +711,7 @@ def create_router_node(
                 f"{topic_info}"
                 f"{history_info}"
                 f"{user_msg}\n\n"
-                f"Write a focused search query targeting the missing information. "
+                f"{missing_instruction} "
                 f"If the question refers to 'our topic', 'the topic', or uses ambiguous pronouns, "
                 f"resolve it using the topic name and conversation history.\n"
                 f"Return EXACTLY in this format:\n"
@@ -686,8 +733,8 @@ def create_router_node(
                 clean = re.sub(r"\b(what|is|are|the|explain|how|why|tell|me|about|can|you|define|describe|does)\b", "", original_q, flags=re.IGNORECASE)
                 words = [w for w in re.findall(r"\w+", clean) if len(w) > 2]
                 new_search_query = " ".join(words[:6]) if words else original_q
-            elif missing and len(missing) >= 3:
-                new_search_query = missing[:300].strip()
+            elif missing_for_prompt and len(missing_for_prompt) >= 3:
+                new_search_query = missing_for_prompt[:300].strip()
 
         if len(new_search_query) > 300:
             new_search_query = new_search_query[:300].rstrip()
@@ -711,6 +758,7 @@ def create_router_node(
                     "original_q": original_q,
                     "retries": retries,
                     "missing": missing,
+                    "missing_topics": missing_topics,
                     "sources_to_use": sources_to_use,
                 },
                 outputs={
@@ -727,6 +775,7 @@ def create_router_node(
             reason="requery",
             sources=sources_to_use,
             search_query=new_search_query[:40],
+            missing_topics=len(missing_topics),
             latency_ms=f"{latency_ms:.1f}",
         )
         return {
@@ -745,18 +794,25 @@ def create_retrieve_node(
     """Node 3: retrieve."""
     cfg = settings or default_settings
     tool_map = tools or TOOL_REGISTRY
-    default_fetch_count = cfg.TOP_K * cfg.RETRIEVE_MULTIPLIER
+    default_fetch_count = max(1, int(round(float(cfg.TOP_K * cfg.RETRIEVE_MULTIPLIER))))
 
     def _get_fetch_count(src: Source) -> int:
         if src == "wikipedia":
-            return WIKI_TOP_K_RESULTS
+            return int(WIKI_TOP_K_RESULTS)
         elif src == "arxiv":
-            return ARXIV_TOP_K_RESULTS
+            return int(ARXIV_TOP_K_RESULTS)
         elif src == "web":
-            return DUCKDUCKGO_NUM_RESULTS
-        return default_fetch_count
+            return int(DUCKDUCKGO_NUM_RESULTS)
+        return int(default_fetch_count)
 
-    def _get_tool_timeout(src: Source, intent: str | None) -> float:
+    def _get_tool_timeout(src: Source, intent: str | None, retries: int = 0, has_context: bool = True) -> float:
+        # If no context at all has been retrieved and the workflow retried:
+        if not has_context:
+            if retries == 1:
+                return float(getattr(cfg, "TOOL_TIMEOUT_RETRY1_EMPTY_S", DEFAULT_TOOL_TIMEOUT_RETRY1_EMPTY_S))
+            elif retries >= 2:
+                return float(getattr(cfg, "TOOL_TIMEOUT_RETRY2_EMPTY_S", DEFAULT_TOOL_TIMEOUT_RETRY2_EMPTY_S))
+
         is_complex = (intent == "complex")
         simple_timeout = getattr(cfg, "TOOL_TIMEOUT_SIMPLE_S", DEFAULT_TOOL_TIMEOUT_SIMPLE_S)
         complex_timeout = getattr(cfg, "TOOL_TIMEOUT_COMPLEX_S", DEFAULT_TOOL_TIMEOUT_COMPLEX_S)
@@ -769,6 +825,12 @@ def create_retrieve_node(
         search_query = state.get("search_query", state["original_q"])
         tool_queries = state.get("tool_queries", {}) or {}
         intent = state.get("intent")
+        retries = state.get("retries", 0)
+        pool = state.get("pool") or []
+        ranked = state.get("ranked") or []
+        verified_pool = state.get("verified_pool") or []
+        context = state.get("context") or []
+        has_context = bool(pool or ranked or verified_pool or context)
 
         async def _run_tool(src: Source) -> list[dict[str, Any]]:
             retriever = tool_map.get(src)
@@ -777,7 +839,7 @@ def create_retrieve_node(
                 return []
             count = _get_fetch_count(src)
             q = tool_queries.get(src) or search_query
-            tool_timeout = _get_tool_timeout(src, intent)
+            tool_timeout = _get_tool_timeout(src, intent, retries=retries, has_context=has_context)
             try:
                 return await asyncio.wait_for(
                     retriever(q, count),
@@ -785,7 +847,8 @@ def create_retrieve_node(
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"[retrieve] Tool '{src}' timed out after {tool_timeout}s (intent={intent or 'simple'})"
+                    f"[retrieve] Tool '{src}' timed out after {tool_timeout}s "
+                    f"(retries={retries}, has_context={has_context}, intent={intent or 'simple'})"
                 )
                 return []
             except Exception as e:
@@ -926,9 +989,11 @@ def create_merge_pool_node(settings: Settings | None = None) -> Callable[[GraphS
         verdict = state.get("verdict")
         old_pool: list[Chunk] = list(state.get("pool", []))
         new_chunks: list[Chunk] = list(state.get("new_chunks") or state.get("_new_chunks") or [])
+        # Chunks that have already fully satisfied a sub-part — always kept regardless of POOL_MAX ordering
+        verified_pool: list[Chunk] = list(state.get("verified_pool") or [])
 
-        # Append new chunks to old pool without discarding previous sources
-        merged = old_pool + new_chunks
+        # Merge order: verified first (highest priority) → old pool → new chunks.
+        merged = verified_pool + old_pool + new_chunks
         carried_count = len(old_pool)
 
         deduped: dict[str, Chunk] = {}
@@ -940,12 +1005,15 @@ def create_merge_pool_node(settings: Settings | None = None) -> Callable[[GraphS
                 if c.score is not None and (existing.score is None or c.score > existing.score):
                     deduped[c.id] = c
 
-        final_list = list(deduped.values())
-        final_list.sort(
-            key=lambda c: (c.score is None, c.score or 0.0),
-            reverse=True,
-        )
-        capped_pool = final_list[: cfg.POOL_MAX]
+        # Guarantee verified chunks survive the POOL_MAX cap by pinning them first
+        verified_ids = {c.id for c in verified_pool}
+        pinned = [c for c in deduped.values() if c.id in verified_ids]
+        rest = [c for c in deduped.values() if c.id not in verified_ids]
+        rest.sort(key=lambda c: (c.score is None, c.score or 0.0), reverse=True)
+
+        # Fill remaining capacity after pinned chunks
+        remaining_cap = max(0, cfg.POOL_MAX - len(pinned))
+        capped_pool = pinned + rest[:remaining_cap]
 
         latency_ms = (time.perf_counter() - t0) * 1000
         if tracer:
@@ -956,8 +1024,10 @@ def create_merge_pool_node(settings: Settings | None = None) -> Callable[[GraphS
                     "verdict": verdict,
                     "incoming_new_chunks": len(new_chunks),
                     "old_pool_size": len(old_pool),
+                    "verified_pool_size": len(verified_pool),
                 },
                 outputs={
+                    "pinned_verified": len(pinned),
                     "carried_old_count": carried_count,
                     "deduped_total": len(deduped),
                     "capped_pool_size": len(capped_pool),
@@ -965,7 +1035,13 @@ def create_merge_pool_node(settings: Settings | None = None) -> Callable[[GraphS
                 latency_ms=latency_ms,
             )
 
-        _log_node("merge_pool", state, verdict=verdict, carried=len(capped_pool), latency_ms=f"{latency_ms:.1f}")
+        _log_node(
+            "merge_pool", state,
+            verdict=verdict,
+            pinned=len(pinned),
+            carried=len(capped_pool),
+            latency_ms=f"{latency_ms:.1f}",
+        )
         return {"pool": capped_pool}
 
     return merge_pool
@@ -1126,32 +1202,39 @@ def create_rerank_node(
 
 
 def score_gate(state: GraphState, settings: Settings | None = None) -> str:
-    """Conditional edge function after rerank. No LLM call."""
+    """Conditional edge function after rerank. No LLM call.
+
+    Routing logic:
+    - complex intent:
+        score <= LOW_THRESHOLD (0.30)   -> retry_check (context is clearly too weak to evaluate)
+        otherwise                       -> evaluator  (ALWAYS, verify all sub-parts)
+    - simple intent (or default):
+        score >= HIGH_THRESHOLD (0.65)  -> generate   (high confidence single-concept shortcut)
+        score > LOW_THRESHOLD (0.30)    -> evaluator  (ambiguous zone, LLM verifies relevance)
+        score <= LOW_THRESHOLD (0.30)   -> retry_check (poor context, retry with search tools)
+    """
     cfg = settings or default_settings
     ranked = state.get("ranked", [])
     top = ranked[0].score if ranked and ranked[0].score is not None else 0.0
     intent = state.get("intent")
 
-    # Use round(top, 3) so 0.7995+ (displayed as 0.800) routes to generate
     top_rounded = round(top, 3)
 
-    if intent == "simple":
-        # Simple query path: depend on re-rank score only and bypass evaluator node.
-        # - Above simple threshold (default 0.35) -> generate
-        # - Below simple threshold -> retry_check (retries with all tools & keyword query)
-        simple_thresh = getattr(cfg, "SIMPLE_THRESHOLD", DEFAULT_SIMPLE_THRESHOLD)
-        if top_rounded > simple_thresh:
-            decision = "generate"
-        else:
-            decision = "retry_check"
-    else:
-        # Complex query path (preserved exactly as before):
-        if top_rounded >= cfg.HIGH_THRESHOLD:
-            decision = "generate"
-        elif top_rounded <= cfg.LOW_THRESHOLD:
+    if intent == "complex":
+        # Complex query path: ALWAYS run the evaluator so multi-part gaps are detected.
+        # Only skip to retry_check when the context is clearly too weak (score <= LOW_THRESHOLD).
+        if top_rounded <= cfg.LOW_THRESHOLD:
             decision = "retry_check"
         else:
             decision = "evaluator"
+    else:
+        # Simple query path (or default): 3-tier routing
+        if top_rounded >= cfg.HIGH_THRESHOLD:
+            decision = "generate"
+        elif top_rounded > cfg.LOW_THRESHOLD:
+            decision = "evaluator"
+        else:
+            decision = "retry_check"
 
     logger.info(f"[score_gate] intent={intent} top_score={top:.3f} -> {decision}")
     return decision
@@ -1170,16 +1253,13 @@ def create_evaluator_node(
         ranked = state.get("ranked", [])
 
         user_msg = evaluator_user_message({
-            "original_q": original_q,
+            **state,
             "ranked": ranked,
         })
         prompt = (
             f"{EVALUATOR_SYSTEM_PROMPT}\n\n"
             f"{user_msg}\n\n"
-            f"Evaluate relevance and sufficiency. Respond with EXACTLY three lines:\n"
-            f"VERDICT: correct | ambiguous | incorrect\n"
-            f"CAUSE: none | bad_query\n"
-            f"MISSING: <description of what is missing, or none if verdict is correct>"
+            f"Grade each chunk (CHUNK 1, CHUNK 2, ...), specify RELEVANT_CHUNKS, and provide VERDICT, CAUSE, and MISSING following <output_format>."
         )
 
         evaluator_output: EvaluatorOutput | None = None
@@ -1195,12 +1275,24 @@ def create_evaluator_node(
                 verdict="ambiguous",
                 missing="unknown",
                 likely_cause="bad_query",
+                chunk_grades={},
+                relevant_chunks=[],
             )
+
+        # Filter ranked chunks down to the ones kept by evaluator (ordered best first)
+        updated_ranked = ranked
+        if evaluator_output.relevant_chunks:
+            valid_indices = [idx for idx in evaluator_output.relevant_chunks if 1 <= idx <= len(ranked)]
+            if valid_indices:
+                updated_ranked = [ranked[idx - 1] for idx in valid_indices]
+                logger.info(
+                    f"[evaluator] Kept {len(updated_ranked)}/{len(ranked)} relevant chunks based on evaluator: {valid_indices}"
+                )
 
         latency_ms = (time.perf_counter() - t0) * 1000
         if tracer:
             tracer.log_llm_call(
-                model=getattr(llm_instance, "model_name", None) or "ministral-8b-latest",
+                model=getattr(llm_instance, "model_name", None) or "ministral-14b-latest",
                 prompt_text=prompt,
                 model_settings={"temperature": 0.0},
                 usage=getattr(llm_instance, "last_usage", None),
@@ -1224,14 +1316,38 @@ def create_evaluator_node(
                     "verdict": evaluator_output.verdict,
                     "missing": evaluator_output.missing,
                     "likely_cause": evaluator_output.likely_cause,
+                    "chunk_grades": getattr(evaluator_output, "chunk_grades", {}),
+                    "relevant_chunks": getattr(evaluator_output, "relevant_chunks", []),
+                    "kept_chunks_count": len(updated_ranked),
                 },
                 latency_ms=latency_ms,
             )
 
         cause = evaluator_output.likely_cause
         retry_reason = "none" if evaluator_output.verdict == "correct" else "requery"
+
+        # ── Build verified_pool ──────────────────────────────────────────────────
+        # Chunks graded "relevant" (not just partial) for an ambiguous verdict
+        # already satisfy at least one sub-part of the question fully. Keep them
+        # permanently so merge_pool never evicts them.
+        missing_topics: list[str] = getattr(evaluator_output, "missing_topics", []) or []
+
+        verified_pool: list[Chunk] = list(state.get("verified_pool") or [])
+        if evaluator_output.verdict == "ambiguous" and evaluator_output.relevant_chunks:
+            chunk_grades = getattr(evaluator_output, "chunk_grades", {})
+            for idx in evaluator_output.relevant_chunks:
+                if 1 <= idx <= len(ranked):
+                    grade = chunk_grades.get(idx, "partial")
+                    if grade == "relevant":
+                        chunk = ranked[idx - 1]
+                        if not any(c.id == chunk.id for c in verified_pool):
+                            verified_pool.append(chunk)
+
         logger.info(
-            f"[evaluator] verdict={evaluator_output.verdict}, reason='{retry_reason}' (cause={cause}), missing='{evaluator_output.missing}'"
+            f"[evaluator] verdict={evaluator_output.verdict}, reason='{retry_reason}' (cause={cause}), "
+            f"kept={len(updated_ranked)}/{len(ranked)}, "
+            f"verified_pool={len(verified_pool)}, "
+            f"missing_topics={missing_topics}, missing='{evaluator_output.missing}'"
         )
         _log_node(
             "evaluator",
@@ -1240,22 +1356,47 @@ def create_evaluator_node(
             reason=retry_reason,
             missing=evaluator_output.missing[:40],
             cause=evaluator_output.likely_cause,
+            kept_chunks=len(updated_ranked),
+            verified_pool=len(verified_pool),
             latency_ms=f"{latency_ms:.1f}",
         )
         return {
             "verdict": evaluator_output.verdict,
             "missing": evaluator_output.missing,
+            "missing_topics": missing_topics,
             "likely_cause": evaluator_output.likely_cause,
+            "ranked": updated_ranked,
+            "verified_pool": verified_pool,
+            "chunk_grades": getattr(evaluator_output, "chunk_grades", {}),
+            "relevant_chunks": getattr(evaluator_output, "relevant_chunks", []),
         }
 
     return evaluator
 
 
-def evaluator_gate(state: GraphState) -> str:
-    """Conditional edge function after evaluator."""
+def evaluator_gate(state: GraphState, settings=None) -> str:
+    """Conditional edge function after evaluator.
+
+    Routing logic:
+    - correct  -> generate (always)
+    - ambiguous on LAST retry -> generate (take what we have; avoid hybrid fallback)
+    - ambiguous / incorrect otherwise -> retry_check
+    """
+    from src.rag.config import settings as default_settings  # avoid circular at module level
+    cfg = settings or default_settings
+    max_retries = getattr(cfg, "MAX_RETRIES", DEFAULT_MAX_RETRIES)
+
     verdict = state.get("verdict")
-    decision = "generate" if verdict == "correct" else "retry_check"
-    logger.info(f"[evaluator_gate] verdict={verdict} -> {decision}")
+    retries = state.get("retries", 0)
+
+    if verdict == "correct":
+        decision = "generate"
+    else:
+        # Ambiguous or incorrect contexts route to retry_check, which either triggers
+        # a keyword requery pass or routes to hybrid fallback once max retries are reached.
+        decision = "retry_check"
+
+    logger.info(f"[evaluator_gate] verdict={verdict} retries={retries} -> {decision}")
     return decision
 
 
@@ -1316,8 +1457,12 @@ def retry_check_gate(state: GraphState, settings: Settings | None = None) -> str
     return decision
 
 
-def create_generate_node(llm: LLM | None = None) -> Callable[[GraphState], Any]:
+def create_generate_node(
+    llm: LLM | None = None,
+    settings: Settings | None = None,
+) -> Callable[[GraphState], Any]:
     """Node 10: generate."""
+    cfg = settings or default_settings
     llm_instance = llm or LangChainLLM()
 
     async def generate(state: GraphState) -> dict[str, Any]:
@@ -1325,42 +1470,80 @@ def create_generate_node(llm: LLM | None = None) -> Callable[[GraphState], Any]:
         tracer: ChatTracer | None = state.get("tracer")
         original_q = state["original_q"]
         ranked = state.get("ranked", [])
+        intent = state.get("intent") or "simple"
+        is_complex = intent == "complex"
+        max_chunks = cfg.FINAL_CONTEXT_N if is_complex else 4
 
-        citations: list[str] = [c.url or c.title or c.source for c in ranked]
+        # Filter out chunks below CHUNK_FLOOR (default 0.35) to eliminate noise
+        chunk_floor = getattr(cfg, "CHUNK_FLOOR", DEFAULT_CHUNK_FLOOR)
+        active_ranked = [c for c in ranked if (c.score or 0.0) >= chunk_floor]
+        if not active_ranked and ranked:
+            active_ranked = [ranked[0]]
+        active_ranked = active_ranked[:max_chunks]
+
+        citations: list[str] = [c.url or c.title or c.source for c in active_ranked]
         user_msg = generate_user_message({
-            "original_q": original_q,
-            "ranked": ranked,
+            **state,
+            "ranked": active_ranked,
         })
         prompt = f"{GENERATE_SYSTEM_PROMPT}\n\n{user_msg}"
 
         queue: Any = state.get("token_queue")
-        if queue is not None and hasattr(llm_instance, "astream"):
-            answer_parts = []
-            async for tok in llm_instance.astream(prompt):
-                if tok:
-                    answer_parts.append(tok)
-                    await queue.put(tok)
-                    await asyncio.sleep(0)
-            answer = "".join(answer_parts)
-            await queue.put(None)
-        else:
-            answer = await llm_instance.ainvoke(prompt)
-            if queue is not None:
-                await queue.put(answer)
-                await queue.put(None)
+        max_gen_retries = 4
+        backoff_delays = [3.0, 6.0, 10.0, 15.0]
+        answer = ""
+        # Enforce token budget to prevent verbose essay-style answers that hurt faithfulness
+        gen_max_tokens = GENERATE_MAX_TOKENS
+
+        for attempt in range(max_gen_retries + 1):
+            try:
+                if queue is not None and hasattr(llm_instance, "astream"):
+                    answer_parts = []
+                    try:
+                        stream_iter = llm_instance.astream(prompt, max_tokens=gen_max_tokens)
+                    except TypeError:
+                        stream_iter = llm_instance.astream(prompt)
+                    async for tok in stream_iter:
+                        if tok:
+                            answer_parts.append(tok)
+                            await queue.put(tok)
+                            await asyncio.sleep(0)
+                    answer = "".join(answer_parts)
+                    await queue.put(None)
+                else:
+                    try:
+                        answer = await llm_instance.ainvoke(prompt, max_tokens=gen_max_tokens)
+                    except TypeError:
+                        answer = await llm_instance.ainvoke(prompt)
+                    if queue is not None:
+                        await queue.put(answer)
+                        await queue.put(None)
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_rate_limit = any(term in err_msg for term in ("429", "rate limit", "rate_limited", "too many requests"))
+                if is_rate_limit and attempt < max_gen_retries:
+                    delay = backoff_delays[min(attempt, len(backoff_delays) - 1)]
+                    logger.warning(
+                        f"[generate] Generator LLM hit rate limit (429) on attempt {attempt + 1}/{max_gen_retries + 1}. "
+                        f"Sleeping {delay}s before retry..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
 
         deduped_citations = list(dict.fromkeys(citations))
 
         latency_ms = (time.perf_counter() - t0) * 1000
         if tracer:
             tracer.log_llm_call(
-                model=getattr(llm_instance, "model_name", None) or "ministral-8b-latest",
+                model=getattr(llm_instance, "model_name", None) or "ministral-14b-latest",
                 prompt_text=prompt,
-                model_settings={"temperature": 0.3},
+                model_settings={"temperature": 0.0},
                 usage=getattr(llm_instance, "last_usage", None),
                 latency_ms=latency_ms,
                 role="primary",
-                input_chunks=ranked,
+                input_chunks=active_ranked,
                 output_text=answer,
             )
             tracer.log_node(
@@ -1368,10 +1551,10 @@ def create_generate_node(llm: LLM | None = None) -> Callable[[GraphState], Any]:
                 run_type="chain",
                 inputs={
                     "original_q": original_q,
-                    "input_chunks_count": len(ranked),
+                    "input_chunks_count": len(active_ranked),
                     "retrieved_chunks": [
                         {"id": c.id, "source": c.source, "score": c.score}
-                        for c in ranked
+                        for c in active_ranked
                     ],
                 },
                 outputs={
@@ -1431,14 +1614,23 @@ def create_fallback_node(
         citations: list[str] = [c.url or c.title or c.source for c in ranked]
         top_score = ranked[0].score if (ranked and ranked[0].score is not None) else 0.0
 
+        intent = state.get("intent") or "simple"
+        is_complex = intent == "complex"
+        max_chunks = cfg.FINAL_CONTEXT_N if is_complex else 4
+
         if top_score >= cfg.LOW_THRESHOLD:
             logger.info(
                 f"[fallback] top_score={top_score:.3f} >= LOW_THRESHOLD ({cfg.LOW_THRESHOLD}) -> "
                 f"answering using GENERATE_HYBRID_PROMPT (context-primary + fills gaps with knowledge)"
             )
+            active_ranked = [c for c in ranked if (c.score or 0.0) >= cfg.LOW_THRESHOLD]
+            if not active_ranked and ranked:
+                active_ranked = [ranked[0]]
+            active_ranked = active_ranked[:max_chunks]
+            citations = [c.url or c.title or c.source for c in active_ranked]
             user_msg = generate_user_message({
-                "original_q": original_q,
-                "ranked": ranked,
+                **state,
+                "ranked": active_ranked,
             })
             prompt = f"{GENERATE_HYBRID_PROMPT}\n\n{user_msg}"
             is_normal = True
@@ -1448,8 +1640,8 @@ def create_fallback_node(
                 f"using FALLBACK_SYSTEM_PROMPT"
             )
             user_msg = fallback_user_message({
-                "original_q": original_q,
-                "ranked": ranked,
+                **state,
+                "ranked": ranked[:max_chunks],
                 "pool": state.get("pool", []),
                 "missing": missing,
             })
@@ -1458,7 +1650,13 @@ def create_fallback_node(
 
         if queue is not None and hasattr(llm_instance, "astream"):
             answer_parts = []
-            async for tok in llm_instance.astream(prompt):
+            # Use HYBRID_MAX_TOKENS for hybrid path, otherwise standard generate budget
+            fb_max_tokens = HYBRID_MAX_TOKENS if is_normal else GENERATE_MAX_TOKENS
+            try:
+                stream_iter = llm_instance.astream(prompt, max_tokens=fb_max_tokens)
+            except TypeError:
+                stream_iter = llm_instance.astream(prompt)
+            async for tok in stream_iter:
                 if tok:
                     answer_parts.append(tok)
                     await queue.put(tok)
@@ -1466,7 +1664,11 @@ def create_fallback_node(
             answer = "".join(answer_parts)
             await queue.put(None)
         else:
-            answer = await llm_instance.ainvoke(prompt)
+            fb_max_tokens = HYBRID_MAX_TOKENS if is_normal else GENERATE_MAX_TOKENS
+            try:
+                answer = await llm_instance.ainvoke(prompt, max_tokens=fb_max_tokens)
+            except TypeError:
+                answer = await llm_instance.ainvoke(prompt)
             if queue is not None:
                 await queue.put(answer)
                 await queue.put(None)

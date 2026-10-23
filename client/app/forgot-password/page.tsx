@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
+import { supabase, getAuthRedirectUrl } from '@/lib/supabase'
 import { API_BASE_URL } from '@/lib/api'
 
 export default function ForgotPasswordPage() {
@@ -45,7 +45,7 @@ export default function ForgotPasswordPage() {
       }
 
       // 2. Trigger Supabase reset email
-      const redirectToUrl = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback?next=/update-password` : undefined
+      const redirectToUrl = getAuthRedirectUrl('/auth/callback?next=/update-password')
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: redirectToUrl,
       })
