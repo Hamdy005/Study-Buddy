@@ -7,6 +7,7 @@ LangSmith under 'Datasets & Experiments' for the unified 'study-buddy' project.
 
 import os
 import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
@@ -19,22 +20,75 @@ except ImportError:
     Client = None
 
 
+def is_rate_limit_error(exc: Optional[BaseException]) -> bool:
+    """Check whether an exception represents a LangSmith 429 / Rate Limit error."""
+    if exc is None:
+        return False
+    try:
+        from langsmith.utils import LangSmithRateLimitError
+        if isinstance(exc, LangSmithRateLimitError):
+            return True
+    except Exception:
+        pass
+
+    msg = str(exc).lower()
+    if "429" in msg or "rate limit" in msg or "ratelimit" in msg or "too many requests" in msg:
+        return True
+
+    cause = getattr(exc, "__cause__", None)
+    if cause and is_rate_limit_error(cause):
+        return True
+    context = getattr(exc, "__context__", None)
+    if context and is_rate_limit_error(context):
+        return True
+
+    return False
+
+
+class _LangSmithRateLimitFilter(logging.Filter):
+    """Filter out LangSmith 429 rate limit errors from logger records."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info[1] and is_rate_limit_error(record.exc_info[1]):
+            return False
+        msg = record.getMessage().lower()
+        if "429" in msg or "rate limit" in msg or "ratelimit" in msg or "too many requests" in msg:
+            return False
+        return True
+
+
+for _logger_name in ("langsmith", "langsmith.client", "langsmith.run_trees"):
+    logging.getLogger(_logger_name).addFilter(_LangSmithRateLimitFilter())
+
+
 class LangSmithEvalMonitor:
     def __init__(self, project_name: Optional[str] = None):
         self.api_key = os.environ.get("LANGSMITH_API_KEY", "")
         self.endpoint = os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
         self.project_name = project_name or os.environ.get("LANGSMITH_PROJECT", "study-buddy")
+        self.rate_limited = False
         
         self.client: Optional[Client] = None
         if self.api_key and Client is not None:
             try:
-                self.client = Client(api_key=self.api_key, api_url=self.endpoint)
+                def _on_error(err: Exception) -> None:
+                    if is_rate_limit_error(err):
+                        self.rate_limited = True
+
+                self.client = Client(
+                    api_key=self.api_key,
+                    api_url=self.endpoint,
+                    tracing_error_callback=_on_error,
+                )
             except Exception as e:
-                print(f"[!] Warning: Could not initialize LangSmith client: {e}")
+                if is_rate_limit_error(e):
+                    self.rate_limited = True
+                    self.client = None
+                else:
+                    print(f"[!] Warning: Could not initialize LangSmith client: {e}")
 
     def sync_dataset(self, dataset_name: str, items: list[dict]) -> Optional[Any]:
         """Creates or updates a benchmark dataset in LangSmith."""
-        if not self.client:
+        if self.rate_limited or not self.client:
             return None
 
         try:
@@ -69,6 +123,9 @@ class LangSmithEvalMonitor:
             else:
                 return self.client.read_dataset(dataset_name=dataset_name)
         except Exception as e:
+            if is_rate_limit_error(e):
+                self.rate_limited = True
+                return None
             print(f"[!] Warning: Could not sync dataset to LangSmith: {e}")
             return None
 
@@ -83,8 +140,7 @@ class LangSmithEvalMonitor:
         Logs Ragas evaluation results as an Experiment in LangSmith under 'Datasets & Experiments'.
         Links each evaluation run to its corresponding dataset example and logs metric feedbacks.
         """
-        if not self.client:
-            print("[LangSmith] Tracing skipped (no client or API key).")
+        if self.rate_limited or not self.client:
             return
 
         timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -113,6 +169,9 @@ class LangSmithEvalMonitor:
                         example_map[ex.metadata["id"]] = ex.id
                 print(f"[LangSmith] Found dataset '{dataset_name}' (ID: {dataset.id}) with {len(examples)} examples.")
         except Exception as e:
+            if is_rate_limit_error(e):
+                self.rate_limited = True
+                return
             print(f"[!] Warning reading dataset: {e}")
 
         # Create the Experiment project linked to the reference dataset
@@ -133,6 +192,9 @@ class LangSmithEvalMonitor:
                 )
                 print(f"[LangSmith] Created Experiment '{experiment_name}' under 'Datasets & Experiments' (ID: {experiment_project.id})")
             except Exception as e:
+                if is_rate_limit_error(e):
+                    self.rate_limited = True
+                    return
                 print(f"[!] Warning: Could not create experiment project linked to dataset: {e}")
                 target_project_name = self.project_name
         else:
@@ -141,6 +203,8 @@ class LangSmithEvalMonitor:
         try:
             logged_count = 0
             for _, row in results_df.iterrows():
+                if self.rate_limited:
+                    return
                 example_run_id = uuid.uuid4()
                 q_id = row.get("id", "q")
                 q_text = row.get("user_input", "")
@@ -209,6 +273,9 @@ class LangSmithEvalMonitor:
                     )
                     print(f"[LangSmith] Saved final aggregate scores to Experiment metadata: {mean_scores}")
                 except Exception as meta_err:
+                    if is_rate_limit_error(meta_err):
+                        self.rate_limited = True
+                        return
                     print(f"[!] Warning: Could not update experiment metadata with final scores: {meta_err}")
 
             # Also log an explicit summary run with the overall scores
@@ -238,6 +305,9 @@ class LangSmithEvalMonitor:
                             fb_kwargs["session_id"] = experiment_project.id
                         self.client.create_feedback(**fb_kwargs)
                 except Exception as sum_err:
+                    if is_rate_limit_error(sum_err):
+                        self.rate_limited = True
+                        return
                     print(f"[!] Warning: Could not log summary run: {sum_err}")
 
             print(f"[✓] LangSmith tracking successfully logged {logged_count} evaluations.")
@@ -254,4 +324,7 @@ class LangSmithEvalMonitor:
                 print(f"     {proj_url}")
 
         except Exception as e:
+            if is_rate_limit_error(e):
+                self.rate_limited = True
+                return
             print(f"[!] Warning: Could not log evaluation results to LangSmith: {e}")

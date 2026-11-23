@@ -248,5 +248,40 @@ All runtime thresholds and parameters are defined in `src/rag/constants.py` and 
 | `FALLBACK_MODEL` | `ministral-14b-latest` | Mistral 14B for graceful fallback answer generation. |
 | `RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Via Jina API Key (Tier 1 cascade). |
 
+---
+
+## 7. RAG Evaluation & Benchmarks (RAGAS)
+
+The Corrective RAG (CRAG) pipeline was benchmarked and optimized using **RAGAS** across 32 golden evaluation test queries spanning Factoid, Reasoning, Multi-hop, and Hybrid Fallback question types. Detailed evaluation datasets and runner scripts are located in [`evals/`](../../evals).
+
+### 7.1 Overall Pipeline Average Scores (32 Queries)
+
+Across all 32 benchmark questions evaluated end-to-end:
+
+| Metric | Score (0 - 1) | Percentage | Evaluation Focus |
+| :--- | :---: | :---: | :--- |
+| **Context Precision** | **0.8612** | **86.1%** | Ground-truth relevant chunks ranked at the top of retrieved context |
+| **Context Recall** | **0.7572** | **75.7%** | All necessary ground-truth information present in retrieved chunks |
+| **Answer Relevancy** | **0.9488** | **94.9%** | Response pertinence and alignment with user question |
+| **Faithfulness** | **0.7741** | **77.4%** | Factual grounding strictly derived from retrieved context (Strict RAG) |
+| **Answer Correctness** | **0.5923** | **59.2%** | Semantic similarity and factual overlap against reference ground truth |
+
+*Note on Faithfulness:* In accordance with the evaluation design in `evals/run_ragas_eval.py`, faithfulness is evaluated on the Strict RAG path (27 queries). Hybrid Fallback intentionally synthesizes external web knowledge to bridge local context gaps.
+
+### 7.2 Breakdown by Execution Path
+
+| Metric | Strict RAG (27 queries / 84.4%) | Hybrid Fallback (5 queries / 15.6%) |
+| :--- | :---: | :---: |
+| **Context Precision** | **0.8911** (89.1%) | **0.7000** (70.0%) |
+| **Context Recall** | **0.8070** (80.7%) | **0.4881** (48.8%) |
+| **Faithfulness** | **0.7741** (77.4%) | *N/A (Intentionally excluded)* |
+| **Answer Relevancy** | **0.9513** (95.1%) | **0.9357** (93.6%) |
+| **Answer Correctness** | **0.6156** (61.6%) | **0.4668** (46.7%) |
+
+### 7.3 Observability & LangSmith Tracking
+
+All benchmark experiments, evaluation runs, and per-query feedback scores are tracked in **LangSmith** under the `Study-Buddy CRAG Benchmark` dataset.
+
+
 
 

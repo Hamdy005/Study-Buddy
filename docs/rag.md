@@ -220,3 +220,17 @@ Loads chat messages associated with a material (legacy API).
   ]
 }
 ```
+
+---
+
+## Evaluation & Benchmarks (RAGAS)
+
+The RAG pipeline is benchmarked across 32 test questions using **RAGAS** with experiments tracked in **LangSmith**:
+- **Context Precision:** 86.1%
+- **Context Recall:** 75.7%
+- **Answer Relevancy:** 94.9%
+- **Faithfulness:** 77.4%
+- **Answer Correctness:** 59.2%
+
+For detailed evaluation methodology, breakdown by pipeline path, and datasets, refer to [CRAG Pipeline Documentation](../src/rag/documentation.md#7-rag-evaluation--benchmarks-ragas) and the [`evals/`](../evals) directory.
+

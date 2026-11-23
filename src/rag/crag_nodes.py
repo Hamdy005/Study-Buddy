@@ -30,6 +30,9 @@ from src.rag.constants import (
     TRIAGE_SYSTEM_PROMPT,
     UNSAFE_REPLIES,
     CHITCHAT_REPLIES,
+    REPLY_CHITCHAT_SYSTEM_PROMPT,
+    REPLY_REFUSAL_SYSTEM_PROMPT,
+    mask_pii,
     TOOL_TIMEOUT_SECONDS,
     DEFAULT_TOOL_TIMEOUT_SIMPLE_S,
     DEFAULT_TOOL_TIMEOUT_COMPLEX_S,
@@ -437,7 +440,8 @@ def create_triage_node(
 def create_reply_chitchat_node() -> Callable[[GraphState], Any]:
     """Canned reply node for chitchat."""
     async def reply_chitchat(state: GraphState) -> dict[str, Any]:
-        reply = state.get("reply") or CHITCHAT_REPLIES["default"]["en"]
+        raw_reply = state.get("reply") or CHITCHAT_REPLIES["default"]["en"]
+        reply = mask_pii(raw_reply)
         queue: Any = state.get("token_queue")
         if queue is not None:
             await queue.put(reply)
@@ -454,7 +458,8 @@ def create_reply_chitchat_node() -> Callable[[GraphState], Any]:
 def create_reply_refusal_node() -> Callable[[GraphState], Any]:
     """Canned reply node for unsafe refusal."""
     async def reply_refusal(state: GraphState) -> dict[str, Any]:
-        reply = state.get("reply") or UNSAFE_REPLIES["gibberish"]
+        raw_reply = state.get("reply") or UNSAFE_REPLIES["gibberish"]
+        reply = mask_pii(raw_reply)
         queue: Any = state.get("token_queue")
         if queue is not None:
             await queue.put(reply)

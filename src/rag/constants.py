@@ -367,6 +367,24 @@ CRITICAL: Check <user_query> first. If it contains gibberish (e.g. keyboard mash
 </safety>
 """
 
+_PII_MASKING_BLOCK: Final[str] = """\
+<pii_protection>
+CRITICAL PRIVACY & PII MASKING RULE:
+You MUST NEVER echo, reveal, confirm, log, or leak any Personally Identifiable Information (PII) in your output, even if the user explicitly provided or leaked their own personal information in <user_query> or earlier messages.
+1. If the user query contains personal details such as:
+   - Full names or real names
+   - Email addresses (e.g., user@domain.com)
+   - Phone numbers (e.g., +1-xxx-xxx-xxxx, 010xxxxxxxx)
+   - National IDs, SSNs, passport numbers, or driver's license numbers
+   - Physical addresses, street addresses, or home locations
+   - Financial information (credit card numbers, bank account numbers, CVVs)
+   - Passwords, secret keys, or authentication tokens
+   you MUST strictly redact or mask them in your output (e.g., replace with [NAME_REDACTED], [EMAIL_REDACTED], [PHONE_REDACTED], [ID_REDACTED], [ADDRESS_REDACTED], [FINANCIAL_INFO_REDACTED], or omit the sensitive entity entirely).
+2. Never greet or address the user by any personal name, email, or identifier found in the query.
+3. Answer only the educational, academic, or factual question while keeping all responses 100% free of leaked personal information.
+</pii_protection>
+"""
+
 _LANGUAGE_BLOCK: Final[str] = """\
 <language>
 CRITICAL: Your ENTIRE response must be in ONE language only: the language of <user_query>. 
@@ -620,6 +638,8 @@ Exceeding the maximum limit or inventing ungrounded claims to lengthen your answ
 """
     + _SAFETY_BLOCK
     + "\n"
+    + _PII_MASKING_BLOCK
+    + "\n"
     + _INJECTION_BLOCK
     + "\n"
     + _LANGUAGE_BLOCK
@@ -666,6 +686,8 @@ well rather than touching everything superficially. Exceeding this limit is a cr
 """
     + _SAFETY_BLOCK
     + "\n"
+    + _PII_MASKING_BLOCK
+    + "\n"
     + _INJECTION_BLOCK
     + "\n"
     + _LANGUAGE_BLOCK
@@ -700,6 +722,8 @@ and give the next step from rule 5.
 """
     + _SAFETY_BLOCK
     + "\n"
+    + _PII_MASKING_BLOCK
+    + "\n"
     + _INJECTION_BLOCK
     + "\n"
     + _LANGUAGE_BLOCK
@@ -713,6 +737,54 @@ FALLBACK_NO_SOURCES_MSG: Final[str] = (
 FALLBACK_NO_SOURCES_MSG_AR: Final[str] = (
     "لم أتمكن من العثور على مصادر موثوقة للإجابة عن هذا السؤال."
 )
+
+# ─────────────────────────────────────────────────────────────
+# 6. REPLY NODES (Chitchat & Refusal)
+# ─────────────────────────────────────────────────────────────
+
+REPLY_CHITCHAT_SYSTEM_PROMPT: Final[str] = (
+    """\
+<role>
+You are the chitchat responder of Study Buddy, a friendly and concise bilingual (Arabic/English) AI study assistant.
+Your job is to provide polite, pleasant, and brief conversational greetings, small talk, or farewells.
+</role>
+"""
+    + "\n"
+    + _PII_MASKING_BLOCK
+    + "\n"
+    + _LANGUAGE_BLOCK
+)
+
+REPLY_REFUSAL_SYSTEM_PROMPT: Final[str] = (
+    """\
+<role>
+You are the safety refusal responder of Study Buddy, a bilingual (Arabic/English) AI study assistant.
+Your job is to deliver concise, polite policy refusal notices for out-of-scope, unsafe, gibberish, NSFW, political, or religious content.
+</role>
+"""
+    + "\n"
+    + _PII_MASKING_BLOCK
+    + "\n"
+    + _LANGUAGE_BLOCK
+)
+
+_PII_PATTERNS: Final[tuple[tuple[re.Pattern, str], ...]] = (
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b"), "[EMAIL_REDACTED]"),
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN_REDACTED]"),
+    (re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b"), "[CREDIT_CARD_REDACTED]"),
+    (re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"), "[PHONE_REDACTED]"),
+)
+
+
+def mask_pii(text: str) -> str:
+    """Mask personally identifiable information (PII) such as emails, SSNs, credit cards, and phone numbers."""
+    if not text:
+        return text
+    result = text
+    for pattern, replacement in _PII_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result
+
 
 # ─────────────────────────────────────────────────────────────
 # 5. LLM RERANKER  (Tertiary fallback — Jina API → Cohere → this)

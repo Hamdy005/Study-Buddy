@@ -49,7 +49,7 @@ from src.rag.tools import TOOL_REGISTRY
 from src.rag.tools.supabase import retrieve_supabase
 from src.rag.constants import TOP_K_CHUNKS, GRAPH_RECURSION_LIMIT
 from evals.models_cascade import build_judge_llm_cascade, get_judge_embeddings
-from evals.langsmith_logger import LangSmithEvalMonitor
+from evals.langsmith_logger import LangSmithEvalMonitor, is_rate_limit_error
 
 
 async def generate_pipeline_responses(dataset_items: list[dict]) -> list[dict]:
@@ -311,7 +311,8 @@ def run_evaluation(enriched_data: list[dict], out_dir: Path):
             suite_name="crag_ragas",
         )
     except Exception as e:
-        print(f"[!] Warning: LangSmith monitoring failed: {e}")
+        if not is_rate_limit_error(e):
+            print(f"[!] Warning: LangSmith monitoring failed: {e}")
 
 
 async def main():

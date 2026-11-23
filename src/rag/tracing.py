@@ -46,11 +46,81 @@ log = logging.getLogger(__name__)
 # ── LangSmith client (optional — tracing degrades gracefully if not configured) ──
 
 _langsmith_client = None
+_tracing_rate_limited = False
+_rate_limit_lock = threading.Lock()
+
+
+def is_rate_limit_error(exc: Optional[BaseException]) -> bool:
+    """Check whether an exception represents a LangSmith 429 / Rate Limit error."""
+    if exc is None:
+        return False
+    # Check LangSmith exception classes if imported
+    try:
+        from langsmith.utils import LangSmithRateLimitError
+        if isinstance(exc, LangSmithRateLimitError):
+            return True
+    except Exception:
+        pass
+
+    msg = str(exc).lower()
+    if "429" in msg or "rate limit" in msg or "ratelimit" in msg or "too many requests" in msg:
+        return True
+
+    # Check nested exceptions (cause / context)
+    cause = getattr(exc, "__cause__", None)
+    if cause and is_rate_limit_error(cause):
+        return True
+    context = getattr(exc, "__context__", None)
+    if context and is_rate_limit_error(context):
+        return True
+
+    return False
+
+
+def mark_tracing_rate_limited(exc: Optional[BaseException] = None) -> None:
+    """Trip the rate-limit circuit breaker to skip tracing without logging errors."""
+    global _tracing_rate_limited
+    with _rate_limit_lock:
+        _tracing_rate_limited = True
+
+
+def is_tracing_rate_limited() -> bool:
+    """Return whether LangSmith tracing is currently skipped due to rate limiting."""
+    return _tracing_rate_limited
+
+
+class _LangSmithRateLimitFilter(logging.Filter):
+    """Filter out LangSmith 429 rate limit errors from logger records."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info[1] and is_rate_limit_error(record.exc_info[1]):
+            mark_tracing_rate_limited(record.exc_info[1])
+            return False
+        msg = record.getMessage()
+        msg_lower = msg.lower()
+        if "429" in msg_lower or "rate limit" in msg_lower or "ratelimit" in msg_lower or "too many requests" in msg_lower:
+            mark_tracing_rate_limited()
+            return False
+        return True
+
+
+# Install rate-limit filter on langsmith loggers so library background threads don't spam logs
+for _logger_name in ("langsmith", "langsmith.client", "langsmith.run_trees"):
+    logging.getLogger(_logger_name).addFilter(_LangSmithRateLimitFilter())
+
+
+def _tracing_error_callback(exc: Exception) -> None:
+    """Callback for LangSmith background worker queue errors."""
+    if is_rate_limit_error(exc):
+        mark_tracing_rate_limited(exc)
+        return
+    log.debug(f"LangSmith background worker error: {exc}")
 
 
 def _get_client():
     """Lazily initialise the LangSmith client once."""
     global _langsmith_client
+    if _tracing_rate_limited:
+        return None
     if _langsmith_client is not None:
         return _langsmith_client
 
@@ -60,9 +130,15 @@ def _get_client():
 
     try:
         from langsmith import Client
-        _langsmith_client = Client(api_key=api_key)
+        _langsmith_client = Client(
+            api_key=api_key,
+            tracing_error_callback=_tracing_error_callback,
+        )
         return _langsmith_client
     except Exception as exc:
+        if is_rate_limit_error(exc):
+            mark_tracing_rate_limited(exc)
+            return None
         log.warning(f"LangSmith client init failed — tracing disabled: {exc}")
         return None
 
@@ -222,7 +298,7 @@ class ChatTracer:
         tracing is disabled) so the caller can always return it to the frontend.
         """
         self.run_id = str(uuid.uuid4())
-        if not self._client:
+        if is_tracing_rate_limited() or not self._client:
             return self.run_id
 
         project     = os.environ.get("LANGSMITH_PROJECT", DEFAULT_LANGSMITH_PROJECT)
@@ -251,14 +327,18 @@ class ChatTracer:
             )
             self._run_obj.post()
         except Exception as exc:
-            log.debug(f"LangSmith start trace failed: {exc}")
+            if is_rate_limit_error(exc):
+                mark_tracing_rate_limited(exc)
+                self._run_obj = None
+            else:
+                log.debug(f"LangSmith start trace failed: {exc}")
 
         return self.run_id
 
     def finish(self, answer: str, used_fallback: bool = False) -> None:
         """Close the parent trace on success."""
         elapsed_ms = (time.perf_counter() - self._start_ts) * 1000
-        if not self._run_obj:
+        if is_tracing_rate_limited() or not self._run_obj:
             return
         try:
             now = datetime.now(timezone.utc)
@@ -274,12 +354,16 @@ class ChatTracer:
             )
             self._run_obj.patch()
         except Exception as exc:
-            log.warning(f"LangSmith finish trace failed: {exc}")
+            if is_rate_limit_error(exc):
+                mark_tracing_rate_limited(exc)
+                self._run_obj = None
+            else:
+                log.warning(f"LangSmith finish trace failed: {exc}")
 
     def finish_error(self, error: Exception) -> None:
         """Close the parent trace on an unhandled error."""
         elapsed_ms = (time.perf_counter() - self._start_ts) * 1000
-        if not self._run_obj:
+        if is_tracing_rate_limited() or not self._run_obj:
             return
         try:
             now = datetime.now(timezone.utc)
@@ -291,7 +375,11 @@ class ChatTracer:
             )
             self._run_obj.patch()
         except Exception as exc:
-            log.warning(f"LangSmith finish_error trace failed: {exc}")
+            if is_rate_limit_error(exc):
+                mark_tracing_rate_limited(exc)
+                self._run_obj = None
+            else:
+                log.warning(f"LangSmith finish_error trace failed: {exc}")
 
     # ── Child spans ───────────────────────────────────────────────────────────
 
